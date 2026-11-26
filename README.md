@@ -88,7 +88,7 @@ PlatformResourcePackages/
 - monster／UI／bgm 中「大小不同」的少數項目，是在地化差異還是單純版本差異（JP 剛更新過）。
 - 改檔後的完整性檢查：BlackCipher（反作弊）與 launcher 的「修復」是否會偵測／覆蓋修改過的 blob。[推論] 很可能會，需實測。
 
-## 一般使用：`tools/mmvoice.py`（dumper + patcher）
+## 參考實作：`tools/mmvoice.py`（Python dumper + patcher，`.mmvpack`）
 
 ```powershell
 # 1. 從 JP 抽出所有語音成一個 pack（預設只抓路徑含 /voice/ 或 _vo_ 的 clip）
@@ -116,44 +116,72 @@ PlatformResourcePackages/
 - [確認] 離線驗證（假安裝目錄）：97 個 index 條目被改寫，其餘 bytes（含路徑表）完全相同；redirect blob 內 84 個 clip 與 pack 一致；restore 後 index SHA1 與原檔相同。
 - 實測（2026-11-27，16 核 `--jobs 14`）：dump 156 秒；patch dry-run 約 180 秒 → 63 blob / 289 bundle / 7023 clip。
 
-## 給朋友用的 installer：`installer/`（Rust＋Tauri 2）
+## 發佈架構：語音放 Cloudflare Pages、patcher 放 GitHub Releases
 
-在朋友電腦上**現場**重打包，不需要 Python，也不用為每個 TW 版本預先產生 `9876.blob`。只有 JP 改語音時才需要重新 `dump` 一個 pack。
+```
+  本機（你）                                   Cloudflare Pages（JP 語音，不進 git）
+  tools/dump_site.py  ── work/pages/<日期>/ ──▶  latest.json / manifest.json / clips/<sha1>
+  tools/deploy_pages.ps1 (wrangler)                         ▲ 只下載需要的 clip
+                                                           │
+  git tag vX.Y.Z ──▶ GitHub Actions ──▶ Release ──▶ 朋友的 patcher（mmvoice.exe，NSIS 安裝、免管理員）
+                     (.github/workflows/release.yml)   latest.json＋簽章 ──▶ 程式內自我更新
+```
+
+### 語音站台（`tools/dump_site.py` → `tools/deploy_pages.ps1`）
+
+```powershell
+.\.venv\Scripts\python.exe tools\dump_site.py D:\Nexon\MabinogiMobile_JP          # → work\pages\<今天日期>\
+.\tools\deploy_pages.ps1 work\pages\2026-11-27                                     # wrangler pages deploy
+```
+
+- 每次 dump 產生一個全新的日期目錄：`latest.json`（日期＋manifest SHA1）、`manifest.json`（version 3：每個 clip 的大小與 AudioClip 欄位、bundle 名稱＋路徑 → sha1、路徑預設版本）、`clips/<sha1>`（去重後的 JP 原始 FSB5）、`_headers`（clips 永久快取、json 不快取）。
+- [確認] 2026-11-27：129 秒，7297 路徑、7380 個 clip、95.6 MB、7383 個檔案（Pages 單次部署上限 20000、單檔 25 MiB）。
+- Cloudflare 設定只在本機：`deploy.local.json`（`{"project": "..."}`）、`npx wrangler login` 或 `CLOUDFLARE_API_TOKEN`；`.gitignore` 已排除 `deploy.local.json`、`.wrangler/`、`*.key`。
+
+### patcher：`installer/`（Rust＋Tauri 2）
 
 ```
 installer/
   core/   mmv-core：UnityFS（讀 LZ4/LZ4HC、寫 LZ4）、SerializedFile v22＋type tree、AudioClip 原地改寫、
-          blob / index、掃描快取 → 規劃 → 平行重建 → 安全提交
-  cli/    mmvoice-rs.exe：patch / restore / status（測試與除錯用）
-  app/    Tauri GUI（mmvoice.exe）：ui/ 是純 HTML/JS，沒有 bundler
-  build.ps1  產生 installer\dist\（mmvoice.exe＋WebView2Loader.dll，可選 pack 與 mmvoice.json）
+          blob / index、語音站台下載與快取、掃描快取 → 規劃 → 下載 → 平行重建 → 安全提交
+  cli/    mmvoice-rs.exe：patch <tw_root> <站台網址或本機 dump 目錄> / restore / status
+  app/    Tauri GUI（mmvoice.exe）：ui/ 是純 HTML/JS，沒有 bundler；package.json 只為了 Tauri CLI
+  build.ps1  本機開發建置（-Source 指定語音站台、-Bundle 產生未簽章的 NSIS 安裝檔）
 ```
 
+- 語音來源：編譯時的 `MMVOICE_SOURCE`（release workflow 從 repository variable 注入）；執行時可用同名環境變數覆寫（測試用，可指向本機 dump 目錄）。
+- 套用流程：讀 `latest.json` → `manifest.json`（驗 SHA1）→ 掃描本機 TW → 規劃 → **只下載要換、且快取（`%LOCALAPPDATA%\mmvoice\voices`）沒有的 clip**（8 條並行，逐檔驗 SHA1）→ 重建 → 提交。離線時用快取的 manifest。套用完清掉新版本用不到的快取。
 - 演算法與 `tools/mmvoice.py` 相同，差別：
-  - **狀態跟著安裝目錄走**：不需要 `--data`。index 有指向 ≥5000 號 blob 的條目＝已套用；原始 index 一律在 `<pkg>/index.bak`（只會從原始 index 寫入）；package 目錄內 ≥5000 號的 blob 都是我們的。
-  - **是否需要重新套用**：每次套用在 index 旁寫 `<pkg>/index.mmvoice.json`（用的語音包 id／日期、寫入的 index SHA1、原始 index SHA1、被導向的每個原始 blob 的 size＋mtime）。GUI 依此判斷：
-    - index 被換回原檔（遊戲更新／launcher 修復）→「遊戲更新後已還原為韓語」，按重新套用；
-    - index 沒變但被導向的原始 blob 有變（遊戲更新只改 blob）→「遊戲檔案已更新」，[推論] 這時 9876 裡是舊版 bundle，必須重新套用；
-    - 標記的語音包 id 和目前的語音包不同、或沒有標記 →「不是目前的語音包」；
-    - 有新語音包可下載 → 由 `update.json` 判斷（見下方）。
+  - **狀態跟著安裝目錄走**：index 有指向 ≥5000 號 blob 的條目＝已套用；原始 index 一律在 `<pkg>/index.bak`（只會從原始 index 寫入）；package 目錄內 ≥5000 號的 blob 都是我們的。
+  - **是否需要重新套用**：每次套用在 index 旁寫 `<pkg>/index.mmvoice.json`（語音版本 id＝manifest SHA1、日期、寫入的 index SHA1、原始 index SHA1、被導向的每個原始 blob 的 size＋mtime）。GUI 依此判斷：
+    - index 被換回原檔（遊戲更新／launcher 修復）→「遊戲更新後已還原為韓語」；
+    - index 沒變但被導向的原始 blob 有變 →「遊戲檔案已更新」，[推論] 這時 9876 裡是舊版 bundle，必須重新套用；
+    - 站台的語音版本和已套用的不同 →「有新的日文語音」；沒有標記 →「版本不明」。
   - 只重建有換到 JP 的 resource 串流，其他串流原封不動；AudioClip 欄位原地覆寫（[確認] 255 個 bundle、7161 個 AudioClip 換完後物件長度都不變）。
   - 輸出沿用實機驗證過的 UnityPy 格式（flags 0xC2：LZ4、128 KiB 分塊、block info 在尾端；不會變小的分塊存原始資料）。
-  - 遊戲是否執行中：以寫入模式開 `MabinogiMobile.exe`，sharing violation 就是在跑（只檢查這個安裝目錄的遊戲，不改任何東西）。
-  - 掃描快取在 `%LOCALAPPDATA%\mmvoice\scan_cache.json`。
+  - 遊戲是否執行中：以寫入模式開這個安裝目錄的 `MabinogiMobile.exe`，sharing violation 就是在跑（不改任何東西）。
+- 自我更新：`tauri-plugin-updater`，來源是 `https://github.com/<repo>/releases/latest/download/latest.json`，安裝檔需簽章；公鑰與 endpoint 由 workflow 以 `--config` 注入，repo 裡的 `tauri.conf.json` 只有空白預設值。NSIS 以 currentUser 安裝（`%LOCALAPPDATA%\MabiMobile JP Voice`），更新不需要管理員權限。
 - [確認] 驗證（2026-11-27）：
-  - 真實 TW 掃描（只讀）：Rust 5.8 秒（Python 121 秒）；2084 bundle / 15179 clip 的名稱、路徑、SHA1 與 Python 完全一致；規劃 57 blob / 255 bundle / 6749 clip 一致。
-  - 把 57 個相關 blob 複製出來全量 patch：4.1 秒；與已實機驗證的 Python 版 `9876.blob` 逐條比對 254619 個 index 條目，255 個重建 bundle 的每個物件（非音訊比原始 bytes，AudioClip 比欄位與音訊內容）全部相同。
-  - 重跑（9876→9877）、模擬 TW 更新（index 被換回原檔 → 狀態「已還原」）、還原（index 與原檔 SHA1 相同、redirect blob 刪除）都正確。
-  - GUI 透過 CDP 實際操作：預覽、套用、TW 更新偵測、兩段式確認還原、檢查更新、下載語音包（SHA1 驗證）、新版程式提示。
-- GUI 功能：自動偵測安裝路徑（解除安裝登錄檔的 InstallLocation，或常見路徑；可手動選，選上層資料夾會自動找 `appdata`）、狀態（原版／已套用／遊戲更新後已還原）、套用／預覽／還原、語音包比已套用的新時提示重新套用。
-- 語音包來源（依序）：手動選的檔案 → exe 旁邊或 `%LOCALAPPDATA%\mmvoice` 裡最新的 `*.mmvpack`。
-- 更新：exe 旁放 `mmvoice.json` `{"update_url": "https://.../update.json"}`。`update.json` 用 `tools/make_update.py <pack> <pack 下載網址> <輸出>` 產生（`pack.id` = pack 內 manifest.json 的 SHA1，`pack.sha1` = 整個檔案的 SHA1，下載後兩者都會驗證）；可加 `--app-version/--app-url`，程式只會提示並開啟 https 下載頁，不會自動替換自己。
-- 建置：Rust（scoop 的 rustup，`stable-x86_64-pc-windows-gnu`）＋ scoop 的 `mingw`（提供 `dlltool`）。[確認] GNU toolchain 下 `WebView2Loader.dll` 是動態載入，必須和 exe 放在一起（`build.ps1` 會複製）。exe 約 10 MB，需要系統有 WebView2 Runtime（[推論] Win11 與大多數 Win10 已內建）。
+  - 真實 TW 掃描（只讀）：Rust 5.8 秒（Python 121 秒）；2084 bundle / 15179 clip 的名稱、路徑、SHA1 與 Python 完全一致。
+  - 57 個相關 blob 全量 patch：4.1 秒；與已實機驗證的 Python 版 `9876.blob` 逐條比對 254619 個 index 條目，255 個重建 bundle 的每個物件全部相同。
+  - 從本機 HTTP 站台下載（166 段）→ 套用，結果同樣逐物件一致；重跑零下載；伺服器關閉時用快取 manifest。
+  - 自我更新端到端（一次性測試金鑰＋本機伺服器）：安裝 0.1.0 → 偵測 0.1.1 → 下載、驗章、安裝、重啟成 0.1.1 → 套用成功。
+  - 重跑（9876→9877）、模擬遊戲更新（index 換回、或只改 blob）、還原，都正確。
+- 本機建置工具：scoop 的 rustup（`stable-x86_64-pc-windows-gnu`）＋ scoop 的 `mingw`（提供 `dlltool`）。[確認] GNU toolchain 下 `WebView2Loader.dll` 是動態載入，本機 build 的 exe 要和它放在一起；release 在 GitHub Actions 用 MSVC 編，沒有這個問題。
 
-```powershell
-cd installer; .\build.ps1 -Pack ..\work\jp_voice.mmvpack            # dist\ 可直接壓縮分享
-.\target\release\mmvoice-rs.exe patch D:\MabinogiMobile_TW\appdata ..\work\jp_voice.mmvpack --dry-run
-```
+### 第一次發佈要做的設定
+
+1. GitHub：建 repo、`git remote add origin …`、push。
+2. 更新簽章金鑰（只做一次，私鑰不要遺失也不要進 git）：
+   `cd installer\app; npx tauri signer generate -w $HOME\.tauri\mmvoice.key`
+   → secrets `TAURI_SIGNING_PRIVATE_KEY`（私鑰檔內容）、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；variable `TAURI_UPDATER_PUBKEY`（`.pub` 內容）。
+3. Cloudflare Pages：`npx wrangler login`；`npx wrangler pages project create <名稱> --production-branch main`；repo 根目錄建 `deploy.local.json` `{"project": "<名稱>"}`；dump＋deploy。
+   → variable `MMVOICE_SOURCE` = `https://<名稱>.pages.dev`。
+4. 發版：`installer/Cargo.toml` 的 `version` 改成 X.Y.Z → commit → `git tag vX.Y.Z` → `git push --tags`。
+
+### 舊流程（開發與比對用）
+
+`tools/mmvoice.py dump/patch`（`.mmvpack`）與 `tools/build.py`＋`apply.py` 仍保留作為參考實作與比對基準；給朋友的版本不再使用 `.mmvpack`。
 
 ### Pack v2：路徑＋內容（2026-11-27）
 

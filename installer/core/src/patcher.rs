@@ -7,7 +7,7 @@
 use crate::audio::{self, Replacement};
 use crate::blob::{self, BlobWriter};
 use crate::index::{self, Key, REDIRECT_BASE};
-use crate::pack::{Pack, PackReader};
+use crate::voices::Voices;
 use anyhow::{anyhow, bail, Context, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -323,7 +323,7 @@ impl Plan {
     }
 }
 
-pub fn plan(scan: &BTreeMap<String, BlobScan>, pack: &Pack, indexes: &HashMap<String, PkgIndex>) -> Result<Plan> {
+pub fn plan(scan: &BTreeMap<String, BlobScan>, voices: &Voices, indexes: &HashMap<String, PkgIndex>) -> Result<Plan> {
     let live: HashMap<&str, HashSet<Key>> = indexes.iter().map(|(k, v)| Ok((k.as_str(), index::slots(&v.orig)?))).collect::<Result<_>>()?;
     let mut pkgs: BTreeMap<String, Vec<Item>> = BTreeMap::new();
     let mut skipped = 0;
@@ -336,7 +336,7 @@ pub fn plan(scan: &BTreeMap<String, BlobScan>, pack: &Pack, indexes: &HashMap<St
                 continue;
             }
             let need: Vec<(String, String)> = b.clips.iter()
-                .filter_map(|(p, cur)| pack.manifest.lookup(&b.name, p).filter(|h| h != cur).map(|h| (p.clone(), h.to_string())))
+                .filter_map(|(p, cur)| voices.manifest.lookup(&b.name, p).filter(|h| h != cur).map(|h| (p.clone(), h.to_string())))
                 .collect();
             if !need.is_empty() {
                 pkgs.entry(pkg.to_string()).or_default().push(Item { rel: rel.clone(), slot: b.slot as u16, need });
@@ -352,15 +352,15 @@ pub fn plan(scan: &BTreeMap<String, BlobScan>, pack: &Pack, indexes: &HashMap<St
 }
 
 // ------------------------------------------------------------------ 3. rebuild
-fn rebuild_one(root: &Path, pack: &Pack, rdr: &mut PackReader, it: &Item) -> Result<Vec<u8>> {
+fn rebuild_one(root: &Path, voices: &Voices, it: &Item) -> Result<Vec<u8>> {
     let raw = blob::read_slot(&root.join(&it.rel), it.slot as usize)?;
     let mut datas = Vec::with_capacity(it.need.len());
     for (_, h) in &it.need {
-        datas.push(rdr.clip(h)?);
+        datas.push(voices.clip(h)?);
     }
     let mut need = HashMap::new();
     for ((p, h), d) in it.need.iter().zip(&datas) {
-        let fields = pack.manifest.clips.get(h).ok_or_else(|| anyhow!("pack manifest has no fields for {h}"))?;
+        let fields = &voices.manifest.clips.get(h).ok_or_else(|| anyhow!("manifest has no fields for {h}"))?.fields;
         need.insert(p.clone(), Replacement { fields, data: d });
     }
     let (new, n) = audio::patch_bundle(&raw, &need).with_context(|| format!("{}#{}", it.rel, it.slot))?;
@@ -380,7 +380,7 @@ pub struct PatchSummary {
 
 pub struct Options<'a> {
     pub root: &'a Path,
-    pub pack: &'a Pack,
+    pub voices: &'a Voices,
     pub cache: &'a Path,
     pub rescan: bool,
     pub dry_run: bool,
@@ -414,14 +414,24 @@ pub fn patch(o: &Options, report: Report) -> Result<PatchSummary> {
         indexes.insert(p.to_string(), read_pkg_index(o.root, p)?);
     }
     report(Event::Stage("plan"));
-    let plan = plan(&scan, o.pack, &indexes)?;
+    let plan = plan(&scan, o.voices, &indexes)?;
     if plan.skipped_unreferenced > 0 {
         report(Event::Info(format!("略過 {} 個 index 沒有引用的音訊 bundle", plan.skipped_unreferenced)));
     }
     report(Event::Info(format!("需要換 JP 語音：{} blob / {} bundle / {} clip", plan.blobs(), plan.bundles(), plan.clips())));
     let mut summary = PatchSummary { blobs: plan.blobs(), bundles: plan.bundles(), clips: plan.clips(), per_pkg: Vec::new() };
+    let need: HashSet<String> = plan.pkgs.values().flatten().flat_map(|i| i.need.iter().map(|(_, h)| h.clone())).collect();
+    let need_bytes: u64 = need.iter().filter_map(|h| o.voices.manifest.clips.get(h)).map(|c| c.size).sum();
+    report(Event::Info(format!("需要 {} 段不重複的 JP 語音（{:.1} MB）", need.len(), need_bytes as f64 / 1048576.0)));
     if o.dry_run {
         return Ok(summary);
+    }
+
+    // download what is not cached yet (before touching the game directory)
+    report(Event::Stage("download"));
+    let got = o.voices.ensure(&need, &|d, t| report(Event::Progress { stage: "download", done: (d >> 10) as usize, total: (t >> 10) as usize }))?;
+    if got > 0 {
+        report(Event::Info(format!("下載了 {got} 段語音")));
     }
     clean_tmp(o.root);
 
@@ -451,19 +461,12 @@ pub fn patch(o: &Options, report: Report) -> Result<PatchSummary> {
             let tasks = &tasks;
             let cancel = &cancel;
             s.spawn(move || {
-                (0..tasks.len()).into_par_iter().for_each_init(
-                    || o.pack.reader(),
-                    |rdr, i| {
-                        if cancel.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        let r = match rdr {
-                            Ok(rdr) => rebuild_one(o.root, o.pack, rdr, tasks[i]),
-                            Err(e) => Err(anyhow!("open pack: {e:#}")),
-                        };
-                        let _ = tx.send((i, r));
-                    },
-                );
+                (0..tasks.len()).into_par_iter().for_each(|i| {
+                    if cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let _ = tx.send((i, rebuild_one(o.root, o.voices, tasks[i])));
+                });
             });
             let mut done = 0;
             for (i, r) in rx {
@@ -539,8 +542,8 @@ pub fn patch(o: &Options, report: Report) -> Result<PatchSummary> {
                 }
                 let m = Marker {
                     version: 1,
-                    pack_id: o.pack.id.clone(),
-                    pack_created: o.pack.manifest.created.clone(),
+                    pack_id: o.voices.id.clone(),
+                    pack_created: o.voices.manifest.date.clone(),
                     app_version: env!("CARGO_PKG_VERSION").into(),
                     orig_index_sha1: audio::sha1_hex(&ix.orig),
                     index_sha1: audio::sha1_hex(&new_idx),
@@ -561,6 +564,7 @@ pub fn patch(o: &Options, report: Report) -> Result<PatchSummary> {
         report(Event::Info(format!("{pkg}: {}，{changed} 條 index 重導向", name.clone().unwrap_or_else(|| "還原為原始 index".into()))));
         summary.per_pkg.push((pkg.clone(), name, changed));
     }
+    o.voices.prune_cache();
     report(Event::Info(format!("完成，耗時 {:.1} 秒", t0.elapsed().as_secs_f64())));
     Ok(summary)
 }
