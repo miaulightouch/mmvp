@@ -1,0 +1,88 @@
+# Build the patcher and publish it as a GitHub Release with Tauri updater artifacts.
+# Trigger: push a tag vX.Y.Z that matches [workspace.package] version in installer/Cargo.toml.
+#
+# Repository settings (Settings > Secrets and variables > Actions):
+#   secrets.TAURI_SIGNING_PRIVATE_KEY           content of the private key from `npx tauri signer generate`
+#   secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password
+#   vars.TAURI_UPDATER_PUBKEY                   content of the .pub file (public, safe to show)
+#   vars.MMVOICE_SOURCE                         voice site URL, e.g. https://<project>.pages.dev
+# Nothing Cloudflare-related is needed here: the voice site is deployed from your own machine.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          $v = (Select-String -Path installer/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != installer/Cargo.toml version $v" }
+
+      - name: Check configuration
+        run: |
+          if (-not "${{ vars.TAURI_UPDATER_PUBKEY }}") { throw "set repository variable TAURI_UPDATER_PUBKEY" }
+          if (-not "${{ vars.MMVOICE_SOURCE }}") { throw "set repository variable MMVOICE_SOURCE" }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: installer/app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: installer
+
+      - name: Install Tauri CLI
+        working-directory: installer/app
+        run: npm ci
+
+      - name: Updater config (public key + endpoint of this repository)
+        run: |
+          $cfg = @{ plugins = @{ updater = @{
+            pubkey = "${{ vars.TAURI_UPDATER_PUBKEY }}"
+            endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
+          } } }
+          $cfg | ConvertTo-Json -Depth 5 | Set-Content "$env:RUNNER_TEMP/updater.json"
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          MMVOICE_SOURCE: ${{ vars.MMVOICE_SOURCE }}
+        with:
+          projectPath: installer/app
+          tauriScript: npx tauri
+          args: --config ${{ runner.temp }}/updater.json
+          tagName: ${{ github.ref_name }}
+          releaseName: "瑪奇 Mobile 日文語音 ${{ github.ref_name }}"
+          releaseBody: "下載 `*-setup.exe` 安裝（不需要系統管理員權限）。已安裝的版本會自動提示更新。"
+          releaseDraft: false
+          prerelease: false
+          updaterJsonPreferNsis: true
+
+      - name: Attach CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: installer
+        run: |
+          cargo build --release -p mmv-cli
+          gh release upload "${{ github.ref_name }}" target/release/mmvoice-rs.exe --clobber

@@ -1,36 +1,30 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-//! GUI installer for the JP voice pack: pick the TW install, apply / restore, detect game updates,
-//! check for and download newer packs.
-use anyhow::{anyhow, bail, Context, Result};
-use mmv_core::pack::Pack;
+//! GUI patcher: pick the TW install, apply / restore JP voices downloaded from the voice site
+//! (Cloudflare Pages), tell when a re-apply is needed, and update itself from GitHub Releases.
+//!
+//! Build-time configuration (set by the release workflow, nothing secret):
+//!   MMVOICE_SOURCE   voice site base URL, e.g. https://mmvoice-jp.pages.dev
+//! Runtime override for testing: environment variable MMVOICE_SOURCE (URL or local directory).
+use anyhow::{anyhow, Result};
 use mmv_core::patcher::{self, Event, Options, PkgState};
+use mmv_core::voices::{self, Latest, Source, Voices};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, State};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_updater::UpdaterExt;
 
 // ------------------------------------------------------------------ settings & locations
 #[derive(Serialize, Deserialize, Default, Clone)]
 struct Settings {
     root: Option<PathBuf>,
-    pack: Option<PathBuf>,
-}
-
-/// Optional `mmvoice.json` next to the exe, written by whoever distributes the installer.
-#[derive(Deserialize, Default)]
-struct Portable {
-    update_url: Option<String>,
 }
 
 fn data_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("mmvoice")
-}
-fn exe_dir() -> PathBuf {
-    std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default()
 }
 fn load_settings() -> Settings {
     fs::read(data_dir().join("settings.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
@@ -40,8 +34,11 @@ fn save_settings(s: &Settings) -> Result<()> {
     fs::write(data_dir().join("settings.json"), serde_json::to_vec_pretty(s)?)?;
     Ok(())
 }
-fn portable() -> Portable {
-    fs::read(exe_dir().join("mmvoice.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+
+fn source() -> Option<Source> {
+    let s = std::env::var("MMVOICE_SOURCE").ok().filter(|s| !s.is_empty())
+        .or_else(|| option_env!("MMVOICE_SOURCE").filter(|s| !s.is_empty()).map(String::from))?;
+    Some(Source::parse(&s))
 }
 
 /// Accept the install root itself or its parent (…\MabinogiMobile_TW -> …\MabinogiMobile_TW\appdata).
@@ -85,30 +82,10 @@ fn detect_root() -> Option<PathBuf> {
     None
 }
 
-/// Pack to use: chosen one, else the newest *.mmvpack next to the exe or in the data dir.
-fn find_pack(s: &Settings) -> Option<PathBuf> {
-    if let Some(p) = &s.pack {
-        if p.exists() {
-            return Some(p.clone());
-        }
-    }
-    let mut c: Vec<(std::time::SystemTime, PathBuf)> = [exe_dir(), data_dir()]
-        .iter()
-        .filter_map(|d| fs::read_dir(d).ok())
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |x| x == "mmvpack"))
-        .filter_map(|p| Some((fs::metadata(&p).ok()?.modified().ok()?, p)))
-        .collect();
-    c.sort();
-    c.pop().map(|x| x.1)
-}
-
 // ------------------------------------------------------------------ app state
 struct AppState {
     busy: AtomicBool,
-    pack: Mutex<Option<(PathBuf, std::sync::Arc<Pack>)>>,
+    voices: Mutex<Option<Arc<Voices>>>,
 }
 
 struct BusyGuard<'a>(&'a AtomicBool);
@@ -124,26 +101,26 @@ fn begin(st: &AppState) -> Result<BusyGuard<'_>, String> {
     Ok(BusyGuard(&st.busy))
 }
 
-fn load_pack(st: &AppState, path: &Path) -> Result<std::sync::Arc<Pack>> {
-    let mut g = st.pack.lock().unwrap();
-    if let Some((p, pk)) = g.as_ref() {
-        if p == path {
-            return Ok(pk.clone());
+fn err<E: std::fmt::Display>(e: E) -> String {
+    format!("{e:#}")
+}
+
+/// Latest voices (manifest downloaded once per version and kept in memory).
+fn voices(st: &AppState) -> Result<Arc<Voices>> {
+    let src = source().ok_or_else(|| anyhow!("這個版本沒有設定語音來源"))?;
+    let latest = voices::fetch_latest(&src).ok();
+    let mut g = st.voices.lock().unwrap();
+    if let Some(v) = g.as_ref() {
+        if latest.as_ref().map_or(true, |l| l.manifest_sha1 == v.id) {
+            return Ok(v.clone());
         }
     }
-    let pk = std::sync::Arc::new(Pack::open(path)?);
-    *g = Some((path.to_path_buf(), pk.clone()));
-    Ok(pk)
+    let v = Arc::new(Voices::open(src, &data_dir().join("voices"))?);
+    *g = Some(v.clone());
+    Ok(v)
 }
 
-#[derive(Serialize)]
-struct PackInfo {
-    path: String,
-    id: String,
-    created: String,
-    clips: usize,
-}
-
+// ------------------------------------------------------------------ view (local only, fast)
 #[derive(Serialize)]
 struct PkgView {
     pkg: String,
@@ -154,28 +131,21 @@ struct PkgView {
 #[derive(Serialize)]
 struct View {
     version: &'static str,
+    source: Option<String>,
     root: Option<String>,
     root_error: Option<String>,
     game_running: bool,
     pkgs: Vec<PkgView>,
-    /// "original" | "patched" | "outdated" (applied with another / unknown pack) | "stale" (game files
-    /// changed since apply) | "reverted" (game update put the original index back) | "missing" | "unknown"
+    /// "original" | "patched" | "mixed" (packages patched with different voice versions or unknown)
+    /// | "stale" (game files changed since apply) | "reverted" (index replaced) | "missing" | "unknown"
     overall: String,
-    /// pack the install was patched with (from the marker), if known
-    applied_pack: Option<String>,
-    applied_created: Option<String>,
+    applied_id: Option<String>,
+    applied_date: Option<String>,
     stale: Vec<String>,
-    pack: Option<PackInfo>,
-    pack_error: Option<String>,
-    update_url: Option<String>,
-}
-
-fn err<E: std::fmt::Display>(e: E) -> String {
-    format!("{e:#}")
 }
 
 #[tauri::command]
-fn get_view(st: State<AppState>) -> Result<View, String> {
+fn get_view() -> Result<View, String> {
     let mut s = load_settings();
     if s.root.as_ref().map_or(true, |r| normalize_root(r).is_none()) {
         if let Some(r) = detect_root() {
@@ -185,74 +155,65 @@ fn get_view(st: State<AppState>) -> Result<View, String> {
     }
     let mut v = View {
         version: env!("CARGO_PKG_VERSION"),
+        source: source().map(|s| s.describe()),
         root: s.root.as_ref().map(|p| p.display().to_string()),
         root_error: None,
         game_running: false,
         pkgs: Vec::new(),
         overall: "unknown".into(),
-        applied_pack: None,
-        applied_created: None,
+        applied_id: None,
+        applied_date: None,
         stale: Vec::new(),
-        pack: None,
-        pack_error: None,
-        update_url: portable().update_url,
     };
-    match find_pack(&s) {
-        None => v.pack_error = Some("找不到語音包（.mmvpack），請選擇檔案或檢查更新".into()),
-        Some(p) => match load_pack(&st, &p) {
-            Ok(pk) => v.pack = Some(PackInfo { path: p.display().to_string(), id: pk.id.clone(), created: pk.manifest.created.clone(), clips: pk.manifest.clips.len() }),
-            Err(e) => v.pack_error = Some(err(e)),
-        },
-    }
-    match s.root.as_deref() {
-        None => v.root_error = Some("找不到瑪奇 Mobile（台版）安裝位置，請手動選擇".into()),
-        Some(root) => {
-            v.game_running = patcher::game_running(root);
-            match patcher::status(root) {
-                Ok(list) => {
-                    let (mut missing, mut reverted, mut patched, mut unknown_pack) = (false, false, false, false);
-                    for p in list {
-                        match &p.state {
-                            PkgState::Missing => missing = true,
-                            PkgState::Reverted => reverted = true,
-                            PkgState::Patched { pack_id, pack_created, stale, .. } => {
-                                patched = true;
-                                v.stale.extend(stale.iter().cloned());
-                                match pack_id {
-                                    None => unknown_pack = true,
-                                    Some(id) => {
-                                        if v.applied_pack.as_ref().map_or(false, |a| a != id) {
-                                            unknown_pack = true; // packages patched with different packs
-                                        }
-                                        v.applied_pack = Some(id.clone());
-                                        v.applied_created = pack_created.clone();
-                                    }
-                                }
-                            }
-                            PkgState::Original => {}
-                        }
-                        v.pkgs.push(PkgView { pkg: p.pkg, state: p.state, redirected: p.entries_redirected });
-                    }
-                    let current = v.pack.as_ref().map(|p| &p.id);
-                    v.overall = if missing {
-                        "missing"
-                    } else if reverted {
-                        "reverted"
-                    } else if !v.stale.is_empty() {
-                        "stale"
-                    } else if patched && (unknown_pack || (current.is_some() && v.applied_pack.as_ref() != current)) {
-                        "outdated"
-                    } else if patched {
-                        "patched"
-                    } else {
-                        "original"
-                    }
-                    .into();
-                }
-                Err(e) => v.root_error = Some(err(e)),
-            }
+    let Some(root) = s.root.as_deref() else {
+        v.root_error = Some("找不到瑪奇 Mobile（台版）安裝位置，請手動選擇".into());
+        return Ok(v);
+    };
+    v.game_running = patcher::game_running(root);
+    let list = match patcher::status(root) {
+        Ok(l) => l,
+        Err(e) => {
+            v.root_error = Some(err(e));
+            return Ok(v);
         }
+    };
+    let (mut missing, mut reverted, mut patched, mut mixed) = (false, false, false, false);
+    for p in list {
+        match &p.state {
+            PkgState::Missing => missing = true,
+            PkgState::Reverted => reverted = true,
+            PkgState::Patched { pack_id, pack_created, stale, .. } => {
+                patched = true;
+                v.stale.extend(stale.iter().cloned());
+                match pack_id {
+                    None => mixed = true,
+                    Some(id) => {
+                        if v.applied_id.as_ref().map_or(false, |a| a != id) {
+                            mixed = true;
+                        }
+                        v.applied_id = Some(id.clone());
+                        v.applied_date = pack_created.clone();
+                    }
+                }
+            }
+            PkgState::Original => {}
+        }
+        v.pkgs.push(PkgView { pkg: p.pkg, state: p.state, redirected: p.entries_redirected });
     }
+    v.overall = if missing {
+        "missing"
+    } else if reverted {
+        "reverted"
+    } else if !v.stale.is_empty() {
+        "stale"
+    } else if patched && mixed {
+        "mixed"
+    } else if patched {
+        "patched"
+    } else {
+        "original"
+    }
+    .into();
     Ok(v)
 }
 
@@ -267,17 +228,27 @@ fn pick_root(app: AppHandle) -> Result<Option<String>, String> {
     Ok(Some(root.display().to_string()))
 }
 
-#[tauri::command]
-fn pick_pack(app: AppHandle, st: State<AppState>) -> Result<Option<String>, String> {
-    let Some(p) = app.dialog().file().set_title("選擇語音包").add_filter("語音包", &["mmvpack"]).blocking_pick_file() else { return Ok(None) };
-    let p = p.into_path().map_err(err)?;
-    load_pack(&st, &p).map_err(err)?;
-    let mut s = load_settings();
-    s.pack = Some(p.clone());
-    save_settings(&s).map_err(err)?;
-    Ok(Some(p.display().to_string()))
+// ------------------------------------------------------------------ voices (network)
+#[derive(Serialize)]
+struct VoicesInfo {
+    date: String,
+    id: String,
+    clips: usize,
+    bytes: u64,
 }
 
+#[tauri::command]
+async fn check_voices(app: AppHandle) -> Result<VoicesInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let v = voices(&app.state::<AppState>()).map_err(err)?;
+        let Latest { date, clips, bytes, .. } = v.latest.clone();
+        Ok(VoicesInfo { date, id: v.id.clone(), clips, bytes })
+    })
+    .await
+    .map_err(err)?
+}
+
+// ------------------------------------------------------------------ patch / restore
 #[derive(Clone, Serialize)]
 struct Progress {
     stage: String,
@@ -303,20 +274,8 @@ fn reporter(app: &AppHandle) -> impl Fn(Event) + Sync + '_ {
 
 #[derive(Serialize)]
 struct PatchResult {
-    blobs: usize,
     bundles: usize,
     clips: usize,
-}
-
-fn do_patch(app: &AppHandle, st: &AppState, dry_run: bool) -> Result<PatchResult> {
-    let s = load_settings();
-    let root = s.root.clone().ok_or_else(|| anyhow!("尚未選擇安裝目錄"))?;
-    let pack_path = find_pack(&s).ok_or_else(|| anyhow!("找不到語音包"))?;
-    let pack = load_pack(st, &pack_path)?;
-    let cache = data_dir().join("scan_cache.json");
-    let rep = reporter(app);
-    let r = patcher::patch(&Options { root: &root, pack: &pack, cache: &cache, rescan: false, dry_run, blob_no: patcher::DEFAULT_BLOB_NO }, &rep)?;
-    Ok(PatchResult { blobs: r.blobs, bundles: r.bundles, clips: r.clips })
 }
 
 #[tauri::command]
@@ -324,7 +283,13 @@ async fn patch(app: AppHandle, dry_run: bool) -> Result<PatchResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let st = app.state::<AppState>();
         let _g = begin(&st)?;
-        do_patch(&app, &st, dry_run).map_err(err)
+        let root = load_settings().root.ok_or("尚未選擇安裝目錄")?;
+        let v = voices(&st).map_err(err)?;
+        let cache = data_dir().join("scan_cache.json");
+        let rep = reporter(&app);
+        let r = patcher::patch(&Options { root: &root, voices: &v, cache: &cache, rescan: false, dry_run, blob_no: patcher::DEFAULT_BLOB_NO }, &rep)
+            .map_err(err)?;
+        Ok(PatchResult { bundles: r.bundles, clips: r.clips })
     })
     .await
     .map_err(err)?
@@ -343,123 +308,43 @@ async fn restore(app: AppHandle) -> Result<(), String> {
     .map_err(err)?
 }
 
-// ------------------------------------------------------------------ updates
-/// update.json: {"pack": {"id", "created", "url", "size", "sha1"}, "app": {"version", "url"}}
-#[derive(Deserialize, Serialize, Clone)]
-struct RemotePack {
-    id: String,
-    #[serde(default)]
-    created: String,
-    url: String,
-    size: u64,
-    sha1: String,
-}
-#[derive(Deserialize, Serialize, Clone)]
-struct RemoteApp {
-    version: String,
-    url: String,
-}
-#[derive(Deserialize, Serialize, Clone)]
-struct Remote {
-    pack: Option<RemotePack>,
-    app: Option<RemoteApp>,
-}
-
-fn version_newer(a: &str, b: &str) -> bool {
-    let p = |s: &str| s.trim_start_matches('v').split('.').map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
-    p(a) > p(b)
-}
-
+// ------------------------------------------------------------------ self update (GitHub Releases)
 #[derive(Serialize)]
-struct UpdateInfo {
-    pack: Option<RemotePack>,
-    pack_newer: bool,
-    app: Option<RemoteApp>,
-    app_newer: bool,
+struct AppUpdate {
+    version: String,
+    notes: Option<String>,
 }
 
 #[tauri::command]
-async fn check_update(st: State<'_, AppState>) -> Result<UpdateInfo, String> {
-    let url = portable().update_url.ok_or("沒有設定更新網址（mmvoice.json 的 update_url）")?;
-    let remote: Remote = tauri::async_runtime::spawn_blocking(move || -> Result<Remote> {
-        Ok(ureq::get(&url).timeout(std::time::Duration::from_secs(15)).call()?.into_json()?)
-    })
+async fn check_app_update(app: AppHandle) -> Result<Option<AppUpdate>, String> {
+    let u = app.updater().map_err(err)?.check().await.map_err(err)?;
+    Ok(u.map(|u| AppUpdate { version: u.version.clone(), notes: u.body.clone() }))
+}
+
+#[tauri::command]
+async fn install_app_update(app: AppHandle) -> Result<(), String> {
+    let st = app.state::<AppState>();
+    let _g = begin(&st)?;
+    let Some(u) = app.updater().map_err(err)?.check().await.map_err(err)? else { return Ok(()) };
+    let mut got = 0usize;
+    u.download_and_install(
+        |chunk, total| {
+            got += chunk;
+            let _ = app.emit("progress", Progress { stage: "app".into(), done: got >> 10, total: total.unwrap_or(0) as usize >> 10 });
+        },
+        || {},
+    )
     .await
-    .map_err(err)?
     .map_err(err)?;
-    let current = find_pack(&load_settings()).and_then(|p| load_pack(&st, &p).ok()).map(|p| p.id.clone());
-    Ok(UpdateInfo {
-        pack_newer: remote.pack.as_ref().map_or(false, |r| Some(&r.id) != current.as_ref()),
-        app_newer: remote.app.as_ref().map_or(false, |r| version_newer(&r.version, env!("CARGO_PKG_VERSION"))),
-        pack: remote.pack,
-        app: remote.app,
-    })
-}
-
-fn download(app: &AppHandle, rp: &RemotePack) -> Result<PathBuf> {
-    fs::create_dir_all(data_dir())?;
-    let dst = data_dir().join(format!("jp_voice_{}.mmvpack", &rp.id[..rp.id.len().min(12)]));
-    let tmp = dst.with_extension("part");
-    let resp = ureq::get(&rp.url).call().context("下載失敗")?;
-    let mut r = resp.into_reader();
-    let mut f = fs::File::create(&tmp)?;
-    let mut buf = vec![0u8; 1 << 20];
-    let mut done = 0u64;
-    let mut hasher = mmv_core::audio::Sha1Stream::new();
-    loop {
-        let n = r.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        f.write_all(&buf[..n])?;
-        hasher.update(&buf[..n]);
-        done += n as u64;
-        let _ = app.emit("progress", Progress { stage: "download".into(), done: (done >> 10) as usize, total: (rp.size >> 10) as usize });
-    }
-    drop(f);
-    if hasher.hex() != rp.sha1.to_lowercase() {
-        let _ = fs::remove_file(&tmp);
-        bail!("下載的檔案 SHA1 不符，請重試");
-    }
-    fs::rename(&tmp, &dst)?;
-    let pk = Pack::open(&dst)?;
-    if pk.id != rp.id {
-        bail!("下載的語音包內容與更新資訊不符");
-    }
-    Ok(dst)
-}
-
-#[tauri::command]
-async fn download_pack(app: AppHandle, pack: RemotePack) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let st = app.state::<AppState>();
-        let _g = begin(&st)?;
-        let p = download(&app, &pack).map_err(err)?;
-        load_pack(&st, &p).map_err(err)?;
-        let mut s = load_settings();
-        s.pack = Some(p.clone());
-        save_settings(&s).map_err(err)?;
-        Ok(p.display().to_string())
-    })
-    .await
-    .map_err(err)?
-}
-
-#[tauri::command]
-fn open_url(app: AppHandle, url: String) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
-    if !url.starts_with("https://") {
-        return Err("只開啟 https 連結".into());
-    }
-    app.opener().open_url(url, None::<&str>).map_err(err)
+    app.restart();
 }
 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
-        .manage(AppState { busy: AtomicBool::new(false), pack: Mutex::new(None) })
-        .invoke_handler(tauri::generate_handler![get_view, pick_root, pick_pack, patch, restore, check_update, download_pack, open_url])
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(AppState { busy: AtomicBool::new(false), voices: Mutex::new(None) })
+        .invoke_handler(tauri::generate_handler![get_view, pick_root, check_voices, patch, restore, check_app_update, install_app_update])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
