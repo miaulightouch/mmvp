@@ -4,7 +4,7 @@ Usage: python tools/dump_site.py <jp_root> [--out work/pages] [--date YYYY-MM-DD
 
 Writes <out>/<date>/ (a fresh directory; deploy it with tools/deploy_pages.ps1):
   latest.json                 {"version": 3, "date", "manifest": "manifest.json", "manifest_sha1", "clips", "bytes"}
-  manifest.json               {"version": 3, "date", "created", "filter",
+  manifest.json               {"version": 3, "filter",   (content only: its SHA1 is the voice version id)
                                "clips":   {sha1: {"size": n, "fields": {AudioClip format fields}}},
                                "bundles": {bundle_name: {container_path: sha1}},
                                "default": {container_path: sha1}}
@@ -63,7 +63,8 @@ def main():
             votes.setdefault(path, {}).setdefault(h, 0)
             votes[path][h] += 1
     default = {p: max(c, key=c.get) for p, c in votes.items()}
-    manifest = {"version": 3, "date": a.date, "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "filter": a.filter,
+    # no date / timestamp in the manifest: identical voices give an identical manifest SHA1 (= voice version id)
+    manifest = {"version": 3, "filter": a.filter,
                 "clips": dict(sorted(clips.items())), "default": dict(sorted(default.items())),
                 "bundles": {k: dict(sorted(v.items())) for k, v in sorted(by_bundle.items())}}
     raw = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
