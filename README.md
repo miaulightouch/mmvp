@@ -48,6 +48,8 @@ PlatformResourcePackages/
 ```
 
 - [確認] `blob_no` 最大值 765 與 blob 數量吻合。
+- [確認] `AssetPackages/Starter` 與 `ResourcesPackage/Starter` 的 index **每一條** blob 欄位都帶 `0x8000` 旗標（`0x8000 | NNNN`），其他 package 都沒有。[推論] 意義未知（可能表示位於 Starter）。patch 比對時遮掉這個 bit，改寫時保留。
+- [確認] index 沒有指到所有 slot：TW `AssetPackages` 178444 個 slot 中有 14633 個沒有任何條目指向（其中 160 個含音訊，裡面的語音路徑都另有被引用的副本）。[推論] 是增量更新留下的舊副本，遊戲讀不到，patch 會跳過。
 - [推論] 這是「資產路徑 → (blob, bundle)」的查找表；替換語音時若 bundle 大小或位置改變，可能需要同步改它。字串表的壓縮格式尚未解。
 
 ## 語音資源
@@ -105,6 +107,7 @@ PlatformResourcePackages/
   3. **重建**（平行，每個 bundle 一個 task）：worker 回傳重打包後的 bundle，主行程依抵達順序直接 append 進 `<pkg>/9876.blob.mmvoice.tmp`，最後補 offset 表。沒有暫存 blob；任何失敗都在動到遊戲目錄前中止並刪掉 .tmp。
   4. **提交**：新 blob 用目前 index 沒在用的編號（9876／9877 交替，`--blob-no N` 可改）→ 原子替換 `index` → 最後才刪舊 blob。
   - 第一次改某個 package 的 index 前，原地複製一份 `<pkg>/index.bak`（另在 `--data/backup` 也有一份）。只有原始 index 會被備份：index 內容若已有指向 ≥5000 號 blob 的條目，就視為已 patch，不備份並中止（例如換了 `--data` 找不到 state 時）。restore 後 `index.bak` 保留。
+  - 實套 TW（2026-11-27）：快取掃描下整個 patch 7.7 秒（重建 255 bundle 7 秒）→ 57 blob / 255 bundle / 6749 clip；`AssetPackages/9876.blob` 343 MB（9726 條目）、`AssetPackages/Starter/9876.blob` 22 MB（264 條目）。[確認] 重讀 9876 內 6756 個 clip 全部與 pack 一致；`index.bak` 與原檔 SHA1 相同。實機測試待做。
   - 新 blob 內 slot 順序是抵達順序，所以每次產生的檔案 bytes 不保證相同，但每個 index 條目指到的 bundle 內容相同。
   - [確認] metadata 中檔名格式字串為 `{0:0000}.blob`，所以新檔名只能是數字，無法用 `JP-NNNN.blob`。
   - 還原＝放回原 `index`（並刪掉新增的 blob）。launcher 修復或遊戲更新換掉 `index` 時 mod 自然失效，再跑一次 patch 即可。
