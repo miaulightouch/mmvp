@@ -1,3 +1,51 @@
 <!doctype html>
-<html lang="zh-Hant"><head><meta charset="utf-8"><title>MabiMobile JP Voice</title></head>
-<body><p>placeholder</p></body></html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>瑪奇 Mobile 日文語音</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>瑪奇 Mobile 日文語音</h1>
+    <span id="ver" class="muted"></span>
+  </header>
+
+  <section id="banner" class="banner" hidden></section>
+
+  <section class="card">
+    <div class="row">
+      <div class="label">遊戲目錄</div>
+      <div class="value" id="root">—</div>
+      <button id="pickRoot" class="ghost">變更…</button>
+    </div>
+    <div class="row">
+      <div class="label">語音包</div>
+      <div class="value" id="pack">—</div>
+      <button id="pickPack" class="ghost">選擇…</button>
+    </div>
+    <div class="row">
+      <div class="label">狀態</div>
+      <div class="value"><span id="state" class="pill">—</span> <span id="stateDetail" class="muted"></span></div>
+    </div>
+  </section>
+
+  <section class="actions">
+    <button id="apply" class="primary">套用日文語音</button>
+    <button id="restore">還原中文語音</button>
+    <button id="preview" class="ghost">預覽</button>
+    <button id="update" class="ghost" hidden>檢查更新</button>
+  </section>
+
+  <section class="card" id="progressCard" hidden>
+    <div class="row"><div class="label" id="stage">—</div><div class="value muted" id="count"></div></div>
+    <progress id="bar" max="1" value="0"></progress>
+  </section>
+
+  <section class="card log" id="logCard" hidden><ul id="log"></ul></section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

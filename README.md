@@ -116,6 +116,40 @@ PlatformResourcePackages/
 - [確認] 離線驗證（假安裝目錄）：97 個 index 條目被改寫，其餘 bytes（含路徑表）完全相同；redirect blob 內 84 個 clip 與 pack 一致；restore 後 index SHA1 與原檔相同。
 - 實測（2026-11-27，16 核 `--jobs 14`）：dump 156 秒；patch dry-run 約 180 秒 → 63 blob / 289 bundle / 7023 clip。
 
+## 給朋友用的 installer：`installer/`（Rust＋Tauri 2）
+
+在朋友電腦上**現場**重打包，不需要 Python，也不用為每個 TW 版本預先產生 `9876.blob`。只有 JP 改語音時才需要重新 `dump` 一個 pack。
+
+```
+installer/
+  core/   mmv-core：UnityFS（讀 LZ4/LZ4HC、寫 LZ4）、SerializedFile v22＋type tree、AudioClip 原地改寫、
+          blob / index、掃描快取 → 規劃 → 平行重建 → 安全提交
+  cli/    mmvoice-rs.exe：patch / restore / status（測試與除錯用）
+  app/    Tauri GUI（mmvoice.exe）：ui/ 是純 HTML/JS，沒有 bundler
+  build.ps1  產生 installer\dist\（mmvoice.exe＋WebView2Loader.dll，可選 pack 與 mmvoice.json）
+```
+
+- 演算法與 `tools/mmvoice.py` 相同，差別：
+  - **無狀態**：不需要 `--data`。index 有指向 ≥5000 號 blob 的條目＝已套用；原始 index 一律在 `<pkg>/index.bak`（只會從原始 index 寫入）；package 目錄內 ≥5000 號的 blob 都是我們的。
+  - 只重建有換到 JP 的 resource 串流，其他串流原封不動；AudioClip 欄位原地覆寫（[確認] 255 個 bundle、7161 個 AudioClip 換完後物件長度都不變）。
+  - 輸出沿用實機驗證過的 UnityPy 格式（flags 0xC2：LZ4、128 KiB 分塊、block info 在尾端；不會變小的分塊存原始資料）。
+  - 遊戲是否執行中：以寫入模式開 `MabinogiMobile.exe`，sharing violation 就是在跑（只檢查這個安裝目錄的遊戲，不改任何東西）。
+  - 掃描快取在 `%LOCALAPPDATA%\mmvoice\scan_cache.json`。
+- [確認] 驗證（2026-11-27）：
+  - 真實 TW 掃描（只讀）：Rust 5.8 秒（Python 121 秒）；2084 bundle / 15179 clip 的名稱、路徑、SHA1 與 Python 完全一致；規劃 57 blob / 255 bundle / 6749 clip 一致。
+  - 把 57 個相關 blob 複製出來全量 patch：4.1 秒；與已實機驗證的 Python 版 `9876.blob` 逐條比對 254619 個 index 條目，255 個重建 bundle 的每個物件（非音訊比原始 bytes，AudioClip 比欄位與音訊內容）全部相同。
+  - 重跑（9876→9877）、模擬 TW 更新（index 被換回原檔 → 狀態「已還原」）、還原（index 與原檔 SHA1 相同、redirect blob 刪除）都正確。
+  - GUI 透過 CDP 實際操作：預覽、套用、TW 更新偵測、兩段式確認還原、檢查更新、下載語音包（SHA1 驗證）、新版程式提示。
+- GUI 功能：自動偵測安裝路徑（解除安裝登錄檔的 InstallLocation，或常見路徑；可手動選，選上層資料夾會自動找 `appdata`）、狀態（原版／已套用／遊戲更新後已還原）、套用／預覽／還原、語音包比已套用的新時提示重新套用。
+- 語音包來源（依序）：手動選的檔案 → exe 旁邊或 `%LOCALAPPDATA%\mmvoice` 裡最新的 `*.mmvpack`。
+- 更新：exe 旁放 `mmvoice.json` `{"update_url": "https://.../update.json"}`。`update.json` 用 `tools/make_update.py <pack> <pack 下載網址> <輸出>` 產生（`pack.id` = pack 內 manifest.json 的 SHA1，`pack.sha1` = 整個檔案的 SHA1，下載後兩者都會驗證）；可加 `--app-version/--app-url`，程式只會提示並開啟 https 下載頁，不會自動替換自己。
+- 建置：Rust（scoop 的 rustup，`stable-x86_64-pc-windows-gnu`）＋ scoop 的 `mingw`（提供 `dlltool`）。[確認] GNU toolchain 下 `WebView2Loader.dll` 是動態載入，必須和 exe 放在一起（`build.ps1` 會複製）。exe 約 10 MB，需要系統有 WebView2 Runtime（[推論] Win11 與大多數 Win10 已內建）。
+
+```powershell
+cd installer; .\build.ps1 -Pack ..\work\jp_voice.mmvpack            # dist\ 可直接壓縮分享
+.\target\release\mmvoice-rs.exe patch D:\MabinogiMobile_TW\appdata ..\work\jp_voice.mmvpack --dry-run
+```
+
 ### Pack v2：路徑＋內容（2026-11-27）
 
 - [確認] 兩版同一個 bundle 的 `AssetBundle.m_Name`（如 `dedicated_bundle_7dbd4a02`）相同，所以 TW 的每個 clip 副本會拿「JP 同一個 bundle 裡的那份」；JP 沒有該 bundle 時才用該路徑最常見的 JP 版本。

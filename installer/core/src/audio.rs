@@ -21,6 +21,25 @@ pub fn sha1_hex(b: &[u8]) -> String {
     d.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// Incremental SHA1 (for downloads).
+pub struct Sha1Stream(Sha1);
+impl Sha1Stream {
+    pub fn new() -> Self {
+        Sha1Stream(Sha1::new())
+    }
+    pub fn update(&mut self, b: &[u8]) {
+        self.0.update(b);
+    }
+    pub fn hex(self) -> String {
+        self.0.finalize().iter().map(|x| format!("{x:02x}")).collect()
+    }
+}
+impl Default for Sha1Stream {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct Clip {
     node: usize,         // serialized node index
     obj_start: usize,    // object start inside the serialized node
