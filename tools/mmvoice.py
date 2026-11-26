@@ -374,17 +374,23 @@ def rebuild(a, plan, numbers):
 INDEX_MAGIC = 0xE6A9C3BA
 
 
+INDEX_FLAG = 0x8000  # [確認] set on every entry of the */Starter indexes (blob = 0x8000 | NNNN); meaning unknown
+BLOB_MASK = 0x7FFF
+
+
 def patch_index(buf, redirect):
-    """redirect: {(blob_no, slot): (new_blob_no, new_slot)} -> (new_bytes, entries_changed)."""
+    """redirect: {(blob_no, slot): (new_blob_no, new_slot)} -> (new_bytes, entries_changed).
+    The 0x8000 flag of the blob field is ignored for matching and kept on the rewritten entry."""
     magic, n = struct.unpack_from("<II", buf, 0)
     if magic != INDEX_MAGIC:
         raise ValueError("bad index magic")
     pairs = list(struct.unpack_from(f"<{n * 2}H", buf, 8))
     changed = 0
     for k in range(n):
-        key = (pairs[2 * k], pairs[2 * k + 1])
-        if key in redirect:
-            pairs[2 * k], pairs[2 * k + 1] = redirect[key]
+        b = pairs[2 * k]
+        hit = redirect.get((b & BLOB_MASK, pairs[2 * k + 1]))
+        if hit:
+            pairs[2 * k], pairs[2 * k + 1] = (b & INDEX_FLAG) | hit[0], hit[1]
             changed += 1
     out = bytearray(buf)
     struct.pack_into(f"<{n * 2}H", out, 8, *pairs)
@@ -413,7 +419,7 @@ def is_patched_index(buf):
     magic, n = struct.unpack_from("<II", buf, 0)
     if magic != INDEX_MAGIC:
         raise ValueError("bad index magic")
-    return any(b >= REDIRECT_BASE for b in struct.unpack_from(f"<{n * 2}H", buf, 8)[0::2])
+    return any((b & BLOB_MASK) >= REDIRECT_BASE for b in struct.unpack_from(f"<{n * 2}H", buf, 8)[0::2])
 
 
 def original_index(a, pkg, st):
@@ -444,8 +450,9 @@ def original_index(a, pkg, st):
 
 # ---------------------------------------------------------------- patch (entry)
 def cmd_patch(a):
-    if not (REDIRECT_BASE <= a.single and a.single + 1 <= 0xFFFF):
-        sys.exit(f"--blob-no must be in [{REDIRECT_BASE}, 65534] (lower numbers would be scanned as originals)")
+    if not (REDIRECT_BASE <= a.single and a.single + 1 <= BLOB_MASK):
+        sys.exit(f"--blob-no must be in [{REDIRECT_BASE}, {BLOB_MASK - 1}] "
+                 "(lower numbers would be scanned as originals; bit 15 is an index flag)")
     if not a.dry_run and game_running():
         sys.exit(f"{GAME_EXE} is running; close the game first.")
     man = load_manifest(a.pack)
@@ -470,6 +477,23 @@ def cmd_patch(a):
 
     writers, redirect = rebuild(a, plan, numbers) if plan else ({}, {})
 
+    # build every new index before touching anything; each rebuilt bundle must be referenced
+    new_indexes = {}
+    try:
+        for pkg in pkgs:
+            orig = ctx[pkg][1]
+            n = struct.unpack_from("<I", orig, 4)[0]
+            pairs = struct.unpack_from(f"<{2 * n}H", orig, 8)
+            present = {(pairs[2 * k] & BLOB_MASK, pairs[2 * k + 1]) for k in range(n)}
+            unref = [k for k in redirect.get(pkg, {}) if k not in present]
+            if unref:
+                raise RuntimeError(f"{pkg}: {len(unref)} rebuilt bundles not referenced by index, e.g. {unref[:3]}")
+            new_indexes[pkg] = patch_index(orig, redirect.get(pkg, {}))
+    except BaseException:
+        for w in writers.values():
+            w.abort()
+        raise
+
     for pkg in pkgs:
         rec, orig, old_blobs = ctx[pkg]
         new_blobs = []
@@ -477,7 +501,7 @@ def cmd_patch(a):
             name = f"{numbers[pkg]:04d}.blob"
             os.replace(writers[pkg].tmp, os.path.join(a.root, pkg, name))
             new_blobs.append(name)
-        new_idx, changed = patch_index(orig, redirect.get(pkg, {}))
+        new_idx, changed = new_indexes[pkg]
         idx_path = os.path.join(a.root, pkg, "index")
         with open(idx_path + ".mmvoice.tmp", "wb") as w:
             w.write(new_idx)
