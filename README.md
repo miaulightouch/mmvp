@@ -104,6 +104,7 @@ PlatformResourcePackages/
   2. **規劃**（記憶體）：bundle 內任一 clip 的 JP SHA1 與 TW 不同就列入。`--dry-run` 到此為止。
   3. **重建**（平行，每個 bundle 一個 task）：worker 回傳重打包後的 bundle，主行程依抵達順序直接 append 進 `<pkg>/9876.blob.mmvoice.tmp`，最後補 offset 表。沒有暫存 blob；任何失敗都在動到遊戲目錄前中止並刪掉 .tmp。
   4. **提交**：新 blob 用目前 index 沒在用的編號（9876／9877 交替，`--blob-no N` 可改）→ 原子替換 `index` → 最後才刪舊 blob。
+  - 第一次改某個 package 的 index 前，原地複製一份 `<pkg>/index.bak`（另在 `--data/backup` 也有一份）。只有原始 index 會被備份：index 內容若已有指向 ≥5000 號 blob 的條目，就視為已 patch，不備份並中止（例如換了 `--data` 找不到 state 時）。restore 後 `index.bak` 保留。
   - 新 blob 內 slot 順序是抵達順序，所以每次產生的檔案 bytes 不保證相同，但每個 index 條目指到的 bundle 內容相同。
   - [確認] metadata 中檔名格式字串為 `{0:0000}.blob`，所以新檔名只能是數字，無法用 `JP-NNNN.blob`。
   - 還原＝放回原 `index`（並刪掉新增的 blob）。launcher 修復或遊戲更新換掉 `index` 時 mod 自然失效，再跑一次 patch 即可。
