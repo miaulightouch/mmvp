@@ -92,7 +92,7 @@ PlatformResourcePackages/
 2. `build.py`：對每個 TW bundle 重建 `.resource` 音訊串流（替換的 clip 用 JP 原始 FSB5 bytes，其餘保留），改寫每個 AudioClip 的 `m_Resource.m_Offset/m_Size` 與格式欄位，LZ4 重新打包；再重建 blob 的 offset 表。輸出到 `out/<package>/<blob>`。
    - [確認] 73 blob / 308 bundle / 7362 clip，16 核 18 秒；重掃 `out/` 後 7362 個實例的大小與長度全部等於 JP。
 3. [推論] `index` 不用改：它記的是 (blob, bundle 序號)，bundle 數量與順序不變。
-4. 實機測試：尚未進行（需要寫入 TW 安裝目錄）。
+4. 實機測試（2026-11-27）：[確認] 只換 `AssetPackages/0260.blob`（凱汀、諾拉），以 launcher 正常啟動可進遊戲，NPC 語音已變成 JP，沒有異常。`tools/apply.py apply|restore` 負責備份／套用／還原。
 
 ### 實機前已知風險
 
