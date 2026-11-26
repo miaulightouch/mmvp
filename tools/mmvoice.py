@@ -1,21 +1,23 @@
 """Mabinogi Mobile voice pack: dump voices from one client, patch them into another.
 
-  python tools/mmvoice.py dump    <jp_root> <pack> [--filter REGEX] [--jobs N]
+  python tools/mmvoice.py dump    <jp_root> <pack> [--filter REGEX] [--blacklist TSV] [--jobs N]
   python tools/mmvoice.py patch   <tw_root> <pack> [--jobs N] [--dry-run]
-  python tools/mmvoice.py restore <tw_root> [files ...]       (default: all backed-up files)
+  python tools/mmvoice.py restore <tw_root> [--keep-blobs]
   python tools/mmvoice.py status  <tw_root>
 
 Pack format (.mmvpack = plain ZIP, stored, no compression since audio is already Vorbis):
-  manifest.json  {"version":1, "source":..., "clips": {container_path: {"file", "sha1", "fields"}}}
+  manifest.json  {"version":1, "source":..., "clips": {container_path: {"sha1", "fields"}}}
   clips/<sha1>   raw FSB5 bytes of each AudioClip (deduplicated by content)
 
-patch:
-  * scans every TW blob in parallel; a bundle is rewritten only if one of its AudioClips has a
-    container path in the pack AND its current bytes differ from the pack's bytes;
-  * so it is idempotent: re-running on an already patched install changes nothing;
-  * before overwriting a blob the original is copied to <data>/backup/<rel> (--data, default ./mmvoice_data)
-    (unless the current file is one we wrote ourselves), and state.json records both SHA1s,
-    so after a game update / launcher repair you can just run patch again.
+patch (index redirect, original NNNN.blob files are never modified):
+  * scans every original TW blob in parallel; a bundle needs patching if one of its AudioClips has a
+    container path in the pack AND its bytes differ from the pack's bytes;
+  * patched bundles of NNNN.blob go into a new blob numbered REDIRECT_BASE+NNNN (e.g. 5260.blob);
+    the game names blobs with "{0:0000}.blob", so the name must stay numeric;
+  * the package's `index` ((u16 blob, u16 slot) per asset) is rewritten to point at the new slots;
+  * restore = put the original index back (and delete the redirect blobs). A launcher repair or
+    game update that replaces `index` also reverts the mod; just run patch again.
+  * backups and state.json live in --data (default ./mmvoice_data).
 """
 import argparse
 import glob
@@ -24,6 +26,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -31,8 +34,9 @@ import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(__file__))
-from blob import read_blob_table  # noqa: E402
-from build import write_blob  # noqa: E402
+from blob import BLOB_MAGIC, read_blob_table  # noqa: E402
+
+REDIRECT_BASE = 5000  # redirect blob number = REDIRECT_BASE + original number (max original ~800)
 
 PACKAGES = ["AssetPackages", "AssetPackages/Starter", "ResourcesPackage",
             "ResourcesPackage/Starter", "PlatformResourcePackages"]
@@ -57,6 +61,9 @@ def list_blobs(root):
     out = []
     for pkg in PACKAGES:
         for bp in sorted(glob.glob(os.path.join(root, pkg, "*.blob"))):
+            stem = os.path.splitext(os.path.basename(bp))[0]
+            if stem.isdigit() and int(stem) >= REDIRECT_BASE:
+                continue  # our own redirect blobs
             out.append(os.path.relpath(bp, root))
     return out
 
@@ -109,12 +116,19 @@ def cmd_dump(a):
     blobs = list_blobs(a.root)
     print(f"dump: {len(blobs)} blobs from {a.root}, filter {a.filter!r}", file=sys.stderr)
     results = run_parallel(_dump_blob, [(a.root, r, a.filter) for r in blobs], a.jobs, "dump")
+    skip = set()
+    if a.blacklist:
+        import csv
+        with open(a.blacklist, encoding="utf-8") as f:
+            skip = {r["container_path"] for r in csv.DictReader(f, delimiter="\t")
+                    if r["reason"] in ("identical", "null")}
+        print(f"dump: blacklist {a.blacklist}: {len(skip)} paths excluded", file=sys.stderr)
     clips, written = {}, set()
     tmp = a.pack + ".tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
         for _rel, found in sorted(results, key=lambda r: r[0]):  # deterministic: first blob wins
             for path, (fields, data) in found.items():
-                if path in clips:
+                if path in clips or path in skip:
                     continue
                 h = sha1_bytes(data)
                 if h not in written:
@@ -122,6 +136,7 @@ def cmd_dump(a):
                     written.add(h)
                 clips[path] = {"sha1": h, "fields": fields}
         manifest = {"version": 1, "source": os.path.abspath(a.root), "filter": a.filter,
+                    "blacklist": os.path.basename(a.blacklist) if a.blacklist else None,
                     "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "clips": dict(sorted(clips.items()))}
         z.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
     os.replace(tmp, a.pack)
@@ -135,15 +150,24 @@ def load_manifest(pack):
         return json.loads(z.read("manifest.json"))
 
 
+def redirect_no(blob_no):
+    return REDIRECT_BASE + blob_no
+
+
+def blob_no(rel):
+    return int(os.path.splitext(os.path.basename(rel))[0])
+
+
 def _patch_blob(root, rel, pack, stage):
-    """Scan one TW blob; if anything needs replacing write a patched copy to stage/rel."""
+    """Scan one original TW blob. If any bundle needs JP audio, write the patched bundles (only those)
+    to stage/<pkg>/<REDIRECT_BASE+N>.blob and return the slot mapping {orig_slot: new_slot}."""
     from patch_bundle import ClipData, container_map, patch_bundle
     import UnityPy
     from UnityPy.helpers.ResourceReader import get_resource_data
 
     man = load_manifest(pack)["clips"]
     src = os.path.join(root, rel)
-    replacements, n_clips = {}, 0
+    patched, n_clips = [], 0
     with zipfile.ZipFile(pack) as z:
         for idx, data in iter_audio_bundles(src):
             env = UnityPy.load(data)
@@ -164,18 +188,54 @@ def _patch_blob(root, rel, pack, stage):
                     need[path] = ClipData(entry["fields"], z.read(f"clips/{entry['sha1']}"))
             if need:
                 new, n = patch_bundle(data, need)
-                replacements[idx] = new
+                patched.append((idx, new))
                 n_clips += n
-    if not replacements:
-        return rel, 0, 0, None
-    out = os.path.join(stage, rel)
-    write_blob(src, out, replacements)
-    return rel, len(replacements), n_clips, out
+    if not patched:
+        return rel, {}, 0, None
+    pkg = os.path.dirname(rel)
+    out = os.path.join(stage, pkg, f"{redirect_no(blob_no(rel)):04d}.blob")
+    write_blob_from(out, [b for _i, b in patched])
+    return rel, {i: k for k, (i, _b) in enumerate(patched)}, n_clips, out
+
+
+def write_blob_from(dst, bundles):
+    hdr_end = 8 + 4 * len(bundles)
+    ends, pos = [], hdr_end
+    for b in bundles:
+        pos += len(b)
+        ends.append(pos)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst + ".tmp", "wb") as w:
+        w.write(struct.pack("<II", BLOB_MAGIC, hdr_end))
+        w.write(struct.pack(f"<{len(ends)}I", *ends))
+        for b in bundles:
+            w.write(b)
+    os.replace(dst + ".tmp", dst)
+
+
+# ---------------------------------------------------------------- index
+INDEX_MAGIC = 0xE6A9C3BA
+
+
+def patch_index(buf, redirect):
+    """redirect: {(blob_no, slot): (new_blob_no, new_slot)} -> (new_bytes, entries_changed)."""
+    magic, n = struct.unpack_from("<II", buf, 0)
+    if magic != INDEX_MAGIC:
+        raise ValueError("bad index magic")
+    pairs = list(struct.unpack_from(f"<{n * 2}H", buf, 8))
+    changed = 0
+    for k in range(n):
+        key = (pairs[2 * k], pairs[2 * k + 1])
+        if key in redirect:
+            pairs[2 * k], pairs[2 * k + 1] = redirect[key]
+            changed += 1
+    out = bytearray(buf)
+    struct.pack_into(f"<{n * 2}H", out, 8, *pairs)
+    return bytes(out), changed
 
 
 def state_paths(data_dir):
-    base = os.path.join(data_dir, "backup")
-    return base, os.path.join(data_dir, "state.json")
+    return os.path.join(data_dir, "backup"), os.path.join(data_dir, "state.json")
 
 
 def load_state(data_dir):
@@ -200,34 +260,58 @@ def cmd_patch(a):
     blobs = list_blobs(a.root)
     stage = os.path.join(a.data, "stage")
     shutil.rmtree(stage, ignore_errors=True)
-    print(f"patch: scanning {len(blobs)} blobs in {a.root}", file=sys.stderr)
+    print(f"patch: scanning {len(blobs)} original blobs in {a.root}", file=sys.stderr)
     results = run_parallel(_patch_blob, [(a.root, r, a.pack, stage) for r in blobs], a.jobs, "scan+patch")
     todo = sorted((r for r in results if r[3]), key=lambda r: r[0])
-    print(f"patch: {len(todo)} blobs / {sum(r[1] for r in todo)} bundles / {sum(r[2] for r in todo)} clips need patching")
-    if a.dry_run or not todo:
+    print(f"patch: {len(todo)} blobs / {sum(len(r[1]) for r in todo)} bundles / "
+          f"{sum(r[2] for r in todo)} clips need JP audio")
+    if a.dry_run:
         shutil.rmtree(stage, ignore_errors=True)
         return
 
     base, _ = state_paths(a.data)
     st = load_state(a.data)
-    for rel, _nb, _nc, staged in todo:
-        dst = os.path.join(a.root, rel)
-        cur = sha1_file(dst)
-        rec = st.get(rel)
-        bak = os.path.join(base, rel)
-        if not rec or cur != rec.get("patched_sha1"):
-            # current file is an original (fresh install, game update, or launcher repair) -> back it up
+    by_pkg = {}
+    for rel, slots, _n, staged in todo:
+        by_pkg.setdefault(os.path.dirname(rel), []).append((rel, slots, staged))
+    # packages patched before but needing nothing now still get their index restored
+    pkgs = sorted(set(by_pkg) | set(st))
+    for pkg in pkgs:
+        idx_rel = os.path.join(pkg, "index")
+        idx_path = os.path.join(a.root, idx_rel)
+        bak = os.path.join(base, idx_rel)
+        rec = st.get(pkg)
+        cur = sha1_file(idx_path)
+        if rec and cur == rec["patched_sha1"]:
+            orig = open(bak, "rb").read()           # we patched it: start from our backup
+        else:
             os.makedirs(os.path.dirname(bak), exist_ok=True)
-            shutil.copy2(dst, bak)
-            rec = {"orig_sha1": cur}
-        shutil.copyfile(staged, dst)
-        rec["patched_sha1"] = sha1_file(dst)
-        if rec["patched_sha1"] != sha1_file(staged):
-            sys.exit(f"verify failed for {rel}")
-        st[rel] = rec
-        save_state(a.data, st)  # save after every file so an interruption stays restorable
+            shutil.copy2(idx_path, bak)              # fresh original (install / update / repair)
+            orig = open(bak, "rb").read()
+            rec = {"orig_sha1": cur, "blobs": (rec or {}).get("blobs", [])}
+        # remove redirect blobs from a previous run
+        for old in rec.get("blobs", []):
+            p = os.path.join(a.root, pkg, old)
+            if os.path.exists(p):
+                os.remove(p)
+        redirect, new_blobs = {}, []
+        for rel, slots, staged in by_pkg.get(pkg, []):
+            n, rn = blob_no(rel), redirect_no(blob_no(rel))
+            for s, ns in slots.items():
+                redirect[(n, s)] = (rn, ns)
+            name = os.path.basename(staged)
+            shutil.copyfile(staged, os.path.join(a.root, pkg, name))
+            new_blobs.append(name)
+        new_idx, changed = patch_index(orig, redirect)
+        with open(idx_path + ".mmvoice.tmp", "wb") as w:
+            w.write(new_idx)
+        os.replace(idx_path + ".mmvoice.tmp", idx_path)
+        rec.update(patched_sha1=sha1_file(idx_path), blobs=new_blobs)
+        st[pkg] = rec
+        save_state(a.data, st)
+        print(f"patch: {pkg}: {len(new_blobs)} redirect blobs, {changed} index entries redirected")
     shutil.rmtree(stage, ignore_errors=True)
-    print(f"patch: done, backups in {base}")
+    print(f"patch: done. Original blobs untouched; index backups in {base}")
 
 
 def cmd_restore(a):
@@ -235,36 +319,38 @@ def cmd_restore(a):
         sys.exit(f"{GAME_EXE} is running; close the game first.")
     base, _ = state_paths(a.data)
     st = load_state(a.data)
-    rels = [f.replace("/", os.sep) for f in a.files] if a.files else sorted(st)
-    for rel in rels:
-        rec, dst, bak = st.get(rel), os.path.join(a.root, rel), os.path.join(base, rel)
-        if not rec:
-            print(f"skip {rel}: not patched by mmvoice")
-            continue
-        cur = sha1_file(dst)
-        if cur != rec["patched_sha1"]:
-            print(f"skip {rel}: file changed since patch (game update?), leaving it alone")
+    for pkg in sorted(st):
+        rec = st[pkg]
+        idx_path = os.path.join(a.root, pkg, "index")
+        bak = os.path.join(base, pkg, "index")
+        if sha1_file(idx_path) == rec["patched_sha1"]:
+            shutil.copyfile(bak, idx_path)
+            if sha1_file(idx_path) != rec["orig_sha1"]:
+                sys.exit(f"restore verify failed for {pkg}/index")
+            print(f"restored {pkg}/index")
         else:
-            shutil.copyfile(bak, dst)
-            if sha1_file(dst) != rec["orig_sha1"]:
-                sys.exit(f"restore verify failed for {rel}")
-            print(f"restored {rel}")
-        del st[rel]
+            print(f"{pkg}/index changed since patch (game update / repair): left as is")
+        if not a.keep_blobs:
+            for b in rec.get("blobs", []):
+                p = os.path.join(a.root, pkg, b)
+                if os.path.exists(p):
+                    os.remove(p)
+            print(f"removed {len(rec.get('blobs', []))} redirect blobs in {pkg}")
+        del st[pkg]
         os.remove(bak)
         save_state(a.data, st)
 
 
 def cmd_status(a):
     st = load_state(a.data)
-    patched = changed = 0
-    for rel, rec in sorted(st.items()):
-        cur = sha1_file(os.path.join(a.root, rel))
-        if cur == rec["patched_sha1"]:
-            patched += 1
-        else:
-            changed += 1
-            print(f"reverted/changed: {rel}")
-    print(f"{patched} blobs patched, {changed} reverted or changed (run patch again)")
+    if not st:
+        print("not patched")
+    for pkg, rec in sorted(st.items()):
+        cur = sha1_file(os.path.join(a.root, pkg, "index"))
+        state = "patched" if cur == rec["patched_sha1"] else "REVERTED/CHANGED (run patch again)"
+        missing = [b for b in rec.get("blobs", []) if not os.path.exists(os.path.join(a.root, pkg, b))]
+        print(f"{pkg}: index {state}; {len(rec.get('blobs', []))} redirect blobs"
+              + (f", MISSING {missing}" if missing else ""))
 
 
 def main():
@@ -273,7 +359,8 @@ def main():
     d = sub.add_parser("dump")
     d.add_argument("root")
     d.add_argument("pack")
-    d.add_argument("--filter", default=DEFAULT_FILTER)
+    d.add_argument("--filter", default=DEFAULT_FILTER, help="regex on container path ('.' = all audio)")
+    d.add_argument("--blacklist", help="TSV from tools/blacklist.py; identical/null paths are skipped")
     d.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     p = sub.add_parser("patch")
     p.add_argument("root")
@@ -282,7 +369,7 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     r = sub.add_parser("restore")
     r.add_argument("root")
-    r.add_argument("files", nargs="*")
+    r.add_argument("--keep-blobs", action="store_true", help="only restore index, leave redirect blobs")
     s = sub.add_parser("status")
     s.add_argument("root")
     for x in (p, r, s):
