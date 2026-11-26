@@ -34,15 +34,21 @@ def container_map(env):
 
     (env.container dereferences every PPtr across files and is ~50x slower.)
     """
-    m = {}
+    return bundle_info(env)[1]
+
+
+def bundle_info(env):
+    """(bundle name, {path_id: container path}) from the AssetBundle object.
+    [確認] the bundle name (e.g. dedicated_bundle_7dbd4a02) is identical in JP and TW builds."""
     for obj in env.objects:
-        if obj.type.name != "AssetBundle":
-            continue
-        for path, info in obj.read_typetree()["m_Container"]:
-            asset = info["asset"]
-            if asset["m_FileID"] == 0:
-                m.setdefault(asset["m_PathID"], path)
-    return m
+        if obj.type.name == "AssetBundle":
+            t = obj.read_typetree()
+            m = {}
+            for path, info in t["m_Container"]:
+                if info["asset"]["m_FileID"] == 0:
+                    m.setdefault(info["asset"]["m_PathID"], path)
+            return t["m_Name"], m
+    return "", {}
 
 
 def read_clips(bundle_bytes, wanted=None):

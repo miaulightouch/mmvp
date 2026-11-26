@@ -1,20 +1,27 @@
 """Mabinogi Mobile voice pack: dump voices from one client, patch them into another.
 
-  python tools/mmvoice.py dump    <jp_root> <pack> [--filter REGEX] [--blacklist TSV] [--jobs N]
+  python tools/mmvoice.py dump    <jp_root> <pack> [--filter REGEX] [--jobs N]
   python tools/mmvoice.py patch   <tw_root> <pack> [--jobs N] [--dry-run]
   python tools/mmvoice.py restore <tw_root> [--keep-blobs]
   python tools/mmvoice.py status  <tw_root>
 
 Pack format (.mmvpack = plain ZIP, stored, no compression since audio is already Vorbis):
-  manifest.json  {"version":1, "source":..., "clips": {container_path: {"sha1", "fields"}}}
-  clips/<sha1>   raw FSB5 bytes of each AudioClip (deduplicated by content)
+  manifest.json  {"version":2,
+                  "clips":   {sha1: AudioClip format fields},            every distinct JP content once
+                  "bundles": {bundle_name: {container_path: sha1}},     exact JP variant per bundle
+                  "default": {container_path: sha1}}                    most common variant (fallback)
+  clips/<sha1>   raw FSB5 bytes, stored once per distinct content
+  Bundle names (AssetBundle.m_Name, e.g. dedicated_bundle_7dbd4a02) are identical in JP and TW builds,
+  so a TW copy of a clip gets the JP copy from the same bundle; only unknown bundles use "default".
 
 patch (index redirect, original NNNN.blob files are never modified):
   * scans every original TW blob in parallel; a bundle needs patching if one of its AudioClips has a
     container path in the pack AND its bytes differ from the pack's bytes;
-  * all patched bundles of a package go into one new blob, 9876.blob by default (--single N);
-    with --single 0 each NNNN.blob gets its own REDIRECT_BASE+NNNN.blob instead (e.g. 5260.blob);
+  * all patched bundles of a package go into one new blob, 9876.blob by default (--single N;
+    re-runs alternate 9876/9877: new blob written first, index swapped, old blob deleted last);
     the game names blobs with "{0:0000}.blob", so the name must stay numeric;
+  * a bundle that fails to parse or patch is skipped with a warning (stays TW original);
+  * --dry-run only decides what to patch, it does not repack;
   * the package's `index` ((u16 blob, u16 slot) per asset) is rewritten to point at the new slots;
   * restore = put the original index back (and delete the redirect blobs). A launcher repair or
     game update that replaces `index` also reverts the mod; just run patch again.
@@ -98,57 +105,89 @@ def run_parallel(fn, items, jobs, label):
 
 # ---------------------------------------------------------------- dump
 def _dump_blob(root, rel, pattern):
-    from patch_bundle import read_clips
+    """-> rel, [(bundle_name, path, sha1)], {sha1: (fields, data)}"""
+    import UnityPy
+    from patch_bundle import bundle_info, clip_bytes
     rx = re.compile(pattern, re.I)
-    found = {}
-    for _i, data in iter_audio_bundles(os.path.join(root, rel)):
+    refs, payloads = [], {}
+    for i, data in iter_audio_bundles(os.path.join(root, rel)):
         try:
-            clips = read_clips(data)
+            env = UnityPy.load(data)
+            clips = [o for o in env.objects if o.type.name == "AudioClip"]
+            if not clips:
+                continue
+            name, cont = bundle_info(env)
+            for obj in clips:
+                path = cont.get(obj.path_id)
+                if not path or not rx.search(path):
+                    continue
+                t = obj.read_typetree()
+                raw = clip_bytes(obj, t)
+                h = sha1_bytes(raw)
+                refs.append((name, path, h))
+                if h not in payloads:
+                    from patch_bundle import COPY_FIELDS
+                    payloads[h] = ({k: t[k] for k in COPY_FIELDS if k in t}, raw)
         except Exception as e:  # noqa: BLE001
-            print(f"[warn] {rel}#{_i}: {e}", file=sys.stderr)
-            continue
-        for path, c in clips.items():
-            if rx.search(path) and path not in found:
-                found[path] = (c.fields, c.data)
-    return rel, found
+            print(f"[warn] {rel}#{i}: {e}", file=sys.stderr)
+    return rel, refs, payloads
 
 
 def cmd_dump(a):
     blobs = list_blobs(a.root)
     print(f"dump: {len(blobs)} blobs from {a.root}, filter {a.filter!r}", file=sys.stderr)
-    results = run_parallel(_dump_blob, [(a.root, r, a.filter) for r in blobs], a.jobs, "dump")
-    skip = set()
-    if a.blacklist:
-        import csv
-        with open(a.blacklist, encoding="utf-8") as f:
-            skip = {r["container_path"] for r in csv.DictReader(f, delimiter="\t")
-                    if r["reason"] in ("identical", "null")}
-        print(f"dump: blacklist {a.blacklist}: {len(skip)} paths excluded", file=sys.stderr)
-    clips, written = {}, set()
+    results = sorted(run_parallel(_dump_blob, [(a.root, r, a.filter) for r in blobs], a.jobs, "dump"),
+                     key=lambda r: r[0])
+    by_bundle = {}            # bundle_name -> {path: sha1}
+    votes = {}                # path -> Counter(sha1) for the path-only fallback
+    clips = {}                # sha1 -> fields
     tmp = a.pack + ".tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
-        for _rel, found in sorted(results, key=lambda r: r[0]):  # deterministic: first blob wins
-            for path, (fields, data) in found.items():
-                if path in clips or path in skip:
-                    continue
-                h = sha1_bytes(data)
-                if h not in written:
-                    z.writestr(f"clips/{h}", data)
-                    written.add(h)
-                clips[path] = {"sha1": h, "fields": fields}
-        manifest = {"version": 1, "source": os.path.abspath(a.root), "filter": a.filter,
-                    "blacklist": os.path.basename(a.blacklist) if a.blacklist else None,
-                    "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "clips": dict(sorted(clips.items()))}
-        z.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
+        for _rel, refs, payloads in results:
+            for h, (fields, data) in payloads.items():
+                if h not in clips:
+                    z.writestr(f"clips/{h}", data)   # every distinct content stored exactly once
+                    clips[h] = fields
+            for name, path, h in refs:
+                by_bundle.setdefault(name, {})[path] = h
+                votes.setdefault(path, {}).setdefault(h, 0)
+                votes[path][h] += 1
+        # fallback = variant used by most JP bundles (ties: first seen)
+        default = {p: max(c, key=c.get) for p, c in votes.items()}
+        variants = sum(1 for c in votes.values() if len(c) > 1)
+        manifest = {"version": 2, "source": os.path.abspath(a.root), "filter": a.filter,
+                    "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "clips": clips, "default": dict(sorted(default.items())),
+                    "bundles": {k: dict(sorted(v.items())) for k, v in sorted(by_bundle.items())}}
+        z.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, separators=(",", ":")))
     os.replace(tmp, a.pack)
-    print(f"dump: {len(clips)} clips ({len(written)} unique payloads) -> {a.pack} "
-          f"({os.path.getsize(a.pack) / 2**20:.1f} MB)")
+    print(f"dump: {len(default)} paths, {variants} with multiple JP variants, {len(clips)} unique payloads, "
+          f"{len(by_bundle)} bundles -> {a.pack} ({os.path.getsize(a.pack) / 2**20:.1f} MB)")
 
 
 # ---------------------------------------------------------------- patch
 def load_manifest(pack):
     with zipfile.ZipFile(pack) as z:
-        return json.loads(z.read("manifest.json"))
+        m = json.loads(z.read("manifest.json"))
+    if m.get("version") != 2:
+        sys.exit(f"{pack}: pack version {m.get('version')} not supported, re-run dump")
+    return m
+
+
+_MAN_CACHE = {}
+
+
+def _cached_manifest(pack):
+    """Worker processes are reused across blobs: parse the manifest once per process."""
+    if pack not in _MAN_CACHE:
+        _MAN_CACHE[pack] = load_manifest(pack)
+    return _MAN_CACHE[pack]
+
+
+def lookup(man, bundle_name, path):
+    """JP variant for this exact bundle if JP has the same bundle, else the most common variant."""
+    h = man["bundles"].get(bundle_name, {}).get(path)
+    return h or man["default"].get(path)
 
 
 def redirect_no(blob_no):
@@ -159,40 +198,50 @@ def blob_no(rel):
     return int(os.path.splitext(os.path.basename(rel))[0])
 
 
-def _patch_blob(root, rel, pack, stage):
+def _patch_blob(root, rel, pack, stage, dry_run=False):
     """Scan one original TW blob. If any bundle needs JP audio, write the patched bundles (only those)
-    to stage/<pkg>/<REDIRECT_BASE+N>.blob and return the slot mapping {orig_slot: new_slot}."""
-    from patch_bundle import ClipData, container_map, patch_bundle
+    to stage/<pkg>/<REDIRECT_BASE+N>.blob and return the slot mapping {orig_slot: new_slot}.
+    A bundle that fails to parse/patch is skipped (left as TW original) and reported, not fatal.
+    dry_run: only decide what needs patching, skip the expensive repack."""
+    from patch_bundle import ClipData, bundle_info, clip_bytes, patch_bundle
     import UnityPy
-    from UnityPy.helpers.ResourceReader import get_resource_data
 
-    man = load_manifest(pack)["clips"]
+    man = _cached_manifest(pack)
     src = os.path.join(root, rel)
-    patched, n_clips = [], 0
+    patched, n_clips, warns = [], 0, []
     with zipfile.ZipFile(pack) as z:
         for idx, data in iter_audio_bundles(src):
-            env = UnityPy.load(data)
-            clips = [o for o in env.objects if o.type.name == "AudioClip"]
-            if not clips:
-                continue
-            cont = container_map(env)
-            need = {}
-            for obj in clips:
-                path = cont.get(obj.path_id)
-                entry = man.get(path)
-                if not entry:
+            try:
+                env = UnityPy.load(data)
+                clips = [o for o in env.objects if o.type.name == "AudioClip"]
+                if not clips:
                     continue
-                t = obj.read_typetree()
-                r = t["m_Resource"]
-                cur = bytes(get_resource_data(r["m_Source"], obj.assets_file, r["m_Offset"], r["m_Size"]))
-                if sha1_bytes(cur) != entry["sha1"]:
-                    need[path] = ClipData(entry["fields"], z.read(f"clips/{entry['sha1']}"))
-            if need:
-                new, n = patch_bundle(data, need)
-                patched.append((idx, new))
-                n_clips += n
+                name, cont = bundle_info(env)
+                need = {}
+                for obj in clips:
+                    path = cont.get(obj.path_id)
+                    h = lookup(man, name, path) if path else None
+                    if not h:
+                        continue
+                    if sha1_bytes(clip_bytes(obj, obj.read_typetree())) != h:
+                        need[path] = ClipData(man["clips"][h], None if dry_run else z.read(f"clips/{h}"))
+                if not need:
+                    continue
+                if dry_run:
+                    patched.append((idx, None))
+                    n_clips += len(need)
+                else:
+                    new, n = patch_bundle(data, need)
+                    patched.append((idx, new))
+                    n_clips += n
+            except Exception as e:  # noqa: BLE001
+                warns.append(f"{rel}#{idx}: {e!r}")
+    for w in warns:
+        print(f"[warn] skipped bundle {w}", file=sys.stderr)
     if not patched:
         return rel, {}, 0, None
+    if dry_run:
+        return rel, {i: k for k, (i, _b) in enumerate(patched)}, n_clips, "dry-run"
     pkg = os.path.dirname(rel)
     out = os.path.join(stage, pkg, f"{redirect_no(blob_no(rel)):04d}.blob")
     write_blob_from(out, [b for _i, b in patched])
@@ -286,12 +335,12 @@ def cmd_patch(a):
     stage = os.path.join(a.data, "stage")
     shutil.rmtree(stage, ignore_errors=True)
     print(f"patch: scanning {len(blobs)} original blobs in {a.root}", file=sys.stderr)
-    results = run_parallel(_patch_blob, [(a.root, r, a.pack, stage) for r in blobs], a.jobs, "scan+patch")
+    results = run_parallel(_patch_blob, [(a.root, r, a.pack, stage, a.dry_run) for r in blobs], a.jobs,
+                           "scan" if a.dry_run else "scan+patch")
     todo = sorted((r for r in results if r[3]), key=lambda r: r[0])
     print(f"patch: {len(todo)} blobs / {sum(len(r[1]) for r in todo)} bundles / "
           f"{sum(r[2] for r in todo)} clips need JP audio")
     if a.dry_run:
-        shutil.rmtree(stage, ignore_errors=True)
         return
 
     base, _ = state_paths(a.data)
@@ -314,33 +363,24 @@ def cmd_patch(a):
             shutil.copy2(idx_path, bak)              # fresh original (install / update / repair)
             orig = open(bak, "rb").read()
             rec = {"orig_sha1": cur, "blobs": (rec or {}).get("blobs", [])}
-        # remove redirect blobs from a previous run
-        for old in rec.get("blobs", []):
-            p = os.path.join(a.root, pkg, old)
-            if os.path.exists(p):
-                os.remove(p)
+        old_blobs = list(rec.get("blobs", []))
+        # Crash-safe order: 1) write the new blob under a name the current index does not use,
+        # 2) swap the index atomically, 3) only then delete the previous run's blob.
+        # Two slots (N, N+1) alternate so step 1 never overwrites a file the live index points at.
+        number = a.single if f"{a.single:04d}.blob" not in old_blobs else a.single + 1
+        name = f"{number:04d}.blob"
         redirect, new_blobs = {}, []
         items = by_pkg.get(pkg, [])
-        if a.single and items:
-            # merge every staged redirect blob of this package into one <single>.blob
-            name = f"{a.single:04d}.blob"
+        if items:
             merged, base_slot = [], 0
             for rel, slots, staged in items:
                 n = blob_no(rel)
                 for s, ns in slots.items():
-                    redirect[(n, s)] = (a.single, base_slot + ns)
+                    redirect[(n, s)] = (number, base_slot + ns)
                 merged.append(staged)
                 base_slot += len(slots)
             concat_blobs(merged, os.path.join(a.root, pkg, name))
             new_blobs.append(name)
-        else:
-            for rel, slots, staged in items:
-                n, rn = blob_no(rel), redirect_no(blob_no(rel))
-                for s, ns in slots.items():
-                    redirect[(n, s)] = (rn, ns)
-                name = os.path.basename(staged)
-                shutil.copyfile(staged, os.path.join(a.root, pkg, name))
-                new_blobs.append(name)
         new_idx, changed = patch_index(orig, redirect)
         with open(idx_path + ".mmvoice.tmp", "wb") as w:
             w.write(new_idx)
@@ -348,7 +388,11 @@ def cmd_patch(a):
         rec.update(patched_sha1=sha1_file(idx_path), blobs=new_blobs)
         st[pkg] = rec
         save_state(a.data, st)
-        print(f"patch: {pkg}: {len(new_blobs)} redirect blobs, {changed} index entries redirected")
+        for old in old_blobs:
+            p = os.path.join(a.root, pkg, old)
+            if old not in new_blobs and os.path.exists(p):
+                os.remove(p)
+        print(f"patch: {pkg}: {name} ({len(redirect)} bundles), {changed} index entries redirected")
     shutil.rmtree(stage, ignore_errors=True)
     print(f"patch: done. Original blobs untouched; index backups in {base}")
 
@@ -399,7 +443,6 @@ def main():
     d.add_argument("root")
     d.add_argument("pack")
     d.add_argument("--filter", default=DEFAULT_FILTER, help="regex on container path ('.' = all audio)")
-    d.add_argument("--blacklist", help="TSV from tools/blacklist.py; identical/null paths are skipped")
     d.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     p = sub.add_parser("patch")
     p.add_argument("root")
@@ -407,8 +450,8 @@ def main():
     p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--single", type=int, default=9876,
-                   help="put all patched bundles of a package into one <N>.blob (default 9876); "
-                        "0 = one redirect blob per original (5000+NNNN.blob)")
+                   help="blob number for the patched bundles of each package (default 9876; "
+                        "N and N+1 alternate between runs so the live index never points at a half-written file)")
     r = sub.add_parser("restore")
     r.add_argument("root")
     r.add_argument("--keep-blobs", action="store_true", help="only restore index, leave redirect blobs")
