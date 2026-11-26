@@ -276,18 +276,37 @@ def scan_install(root, data_dir, jobs, rescan=False):
 
 
 # ---------------------------------------------------------------- patch 2: plan
-def plan_patch(scan, man):
-    """-> {pkg: [(rel, slot, {path: jp_sha1}), ...]} in (blob, slot) order."""
-    plan = {}
+def index_slots(idx_bytes):
+    """{(blob_no, slot)} referenced by an index (0x8000 flag masked off)."""
+    magic, n = struct.unpack_from("<II", idx_bytes, 0)
+    if magic != INDEX_MAGIC:
+        raise ValueError("bad index magic")
+    pairs = struct.unpack_from(f"<{n * 2}H", idx_bytes, 8)
+    return {(pairs[2 * k] & BLOB_MASK, pairs[2 * k + 1]) for k in range(n)}
+
+
+def plan_patch(scan, man, live=None):
+    """-> {pkg: [(rel, slot, {path: jp_sha1}), ...]} in (blob, slot) order.
+    live: {pkg: {(blob_no, slot)}} from the original indexes; slots no index entry points at are
+    skipped. [確認] AssetPackages has ~14.6k such slots (160 with audio); every voice path in them also
+    exists in a referenced bundle. [推論] stale copies left behind by incremental updates; the game
+    cannot reach them, so patching them would only grow the new blob."""
+    plan, dead = {}, 0
     for rel in sorted(scan):
+        pkg, no = os.path.dirname(rel), blob_no(rel)
         for slot, name, hashes in scan[rel]["bundles"]:
+            if live is not None and (no, slot) not in live.get(pkg, ()):
+                dead += 1
+                continue
             need = {}
             for path, cur in hashes.items():
                 h = lookup(man, name, path)
                 if h and h != cur:
                     need[path] = h
             if need:
-                plan.setdefault(os.path.dirname(rel), []).append((rel, slot, need))
+                plan.setdefault(pkg, []).append((rel, slot, need))
+    if dead:
+        print(f"plan: {dead} audio bundles skipped (not referenced by their index)", file=sys.stderr)
     for pkg, items in plan.items():
         if len(items) > 0xFFFF:
             sys.exit(f"{pkg}: {len(items)} bundles to patch, more than one blob can address (65535)")
@@ -422,6 +441,24 @@ def is_patched_index(buf):
     return any((b & BLOB_MASK) >= REDIRECT_BASE for b in struct.unpack_from(f"<{n * 2}H", buf, 8)[0::2])
 
 
+def peek_original_index(a, pkg, st):
+    """Read-only. -> (live index is ours, original index bytes). Exits if the index is missing or is
+    patched without a matching state record."""
+    idx_path = os.path.join(a.root, pkg, "index")
+    if not os.path.exists(idx_path):
+        sys.exit(f"{pkg}/index missing (launcher updating/repairing?); nothing was changed")
+    rec = st.get(pkg)
+    if rec and sha1_file(idx_path) == rec["patched_sha1"]:
+        with open(os.path.join(state_paths(a.data)[0], pkg, "index"), "rb") as f:
+            return True, f.read()
+    with open(idx_path, "rb") as f:
+        live = f.read()
+    if is_patched_index(live):
+        sys.exit(f"{pkg}/index is already patched but not recorded in {a.data}/state.json "
+                 f"(different --data?); restore {pkg}/index.bak first. Nothing was changed.")
+    return False, live
+
+
 def original_index(a, pkg, st):
     """-> (rec, original index bytes). Uses our backup if the live index is the one we wrote,
     otherwise treats the live index as a fresh original (install / update / repair) and backs it up,
@@ -430,15 +467,9 @@ def original_index(a, pkg, st):
     base, _ = state_paths(a.data)
     idx_path = os.path.join(a.root, pkg, "index")
     bak = os.path.join(base, pkg, "index")
-    if not os.path.exists(idx_path):
-        sys.exit(f"{pkg}/index missing (launcher updating/repairing?); nothing was changed")
+    ours, _orig = peek_original_index(a, pkg, st)
     rec, cur = st.get(pkg), sha1_file(idx_path)
-    if not (rec and cur == rec["patched_sha1"]):
-        with open(idx_path, "rb") as f:
-            live = f.read()
-        if is_patched_index(live):
-            sys.exit(f"{pkg}/index is already patched but not recorded in {a.data}/state.json "
-                     f"(different --data?); restore {pkg}/index.bak first. Nothing was changed.")
+    if not ours:
         os.makedirs(os.path.dirname(bak), exist_ok=True)
         shutil.copy2(idx_path, bak)
         shutil.copy2(idx_path, idx_path + ".bak.mmvoice.tmp")
@@ -457,7 +488,10 @@ def cmd_patch(a):
         sys.exit(f"{GAME_EXE} is running; close the game first.")
     man = load_manifest(a.pack)
     scan = scan_install(a.root, a.data, a.jobs, a.rescan)
-    plan = plan_patch(scan, man)
+    st = load_state(a.data)
+    live = {pkg: index_slots(peek_original_index(a, pkg, st)[1])
+            for pkg in sorted({os.path.dirname(r) for r in scan})}
+    plan = plan_patch(scan, man, live)
     n_blobs = len({rel for items in plan.values() for rel, _s, _n in items})
     print(f"patch: {n_blobs} blobs / {sum(map(len, plan.values()))} bundles / "
           f"{sum(len(n) for items in plan.values() for _r, _s, n in items)} clips need JP audio")
@@ -465,7 +499,6 @@ def cmd_patch(a):
         return
 
     shutil.rmtree(os.path.join(a.data, "stage"), ignore_errors=True)  # leftovers of the old staging design
-    st = load_state(a.data)
     pkgs = sorted(set(plan) | set(st))  # previously patched packages that need nothing now get restored
     ctx, numbers = {}, {}
     for pkg in pkgs:
