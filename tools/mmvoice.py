@@ -407,9 +407,20 @@ def save_state(data_dir, st):
     write_json_atomic(state_paths(data_dir)[1], st, indent=1, sort_keys=True)
 
 
+def is_patched_index(buf):
+    """True if any entry points at a blob >= REDIRECT_BASE, i.e. the index was written by us
+    (original indexes only reference NNNN.blob below ~800)."""
+    magic, n = struct.unpack_from("<II", buf, 0)
+    if magic != INDEX_MAGIC:
+        raise ValueError("bad index magic")
+    return any(b >= REDIRECT_BASE for b in struct.unpack_from(f"<{n * 2}H", buf, 8)[0::2])
+
+
 def original_index(a, pkg, st):
     """-> (rec, original index bytes). Uses our backup if the live index is the one we wrote,
-    otherwise treats the live index as a fresh original (install / update / repair) and backs it up."""
+    otherwise treats the live index as a fresh original (install / update / repair) and backs it up,
+    both to <data>/backup and in place as <pkg>/index.bak. A patched index is never backed up:
+    detected by content (redirected entries), not only by state.json."""
     base, _ = state_paths(a.data)
     idx_path = os.path.join(a.root, pkg, "index")
     bak = os.path.join(base, pkg, "index")
@@ -417,8 +428,15 @@ def original_index(a, pkg, st):
         sys.exit(f"{pkg}/index missing (launcher updating/repairing?); nothing was changed")
     rec, cur = st.get(pkg), sha1_file(idx_path)
     if not (rec and cur == rec["patched_sha1"]):
+        with open(idx_path, "rb") as f:
+            live = f.read()
+        if is_patched_index(live):
+            sys.exit(f"{pkg}/index is already patched but not recorded in {a.data}/state.json "
+                     f"(different --data?); restore {pkg}/index.bak first. Nothing was changed.")
         os.makedirs(os.path.dirname(bak), exist_ok=True)
         shutil.copy2(idx_path, bak)
+        shutil.copy2(idx_path, idx_path + ".bak.mmvoice.tmp")
+        os.replace(idx_path + ".bak.mmvoice.tmp", idx_path + ".bak")
         rec = {"orig_sha1": cur, "blobs": (rec or {}).get("blobs", [])}
     with open(bak, "rb") as f:
         return rec, f.read()
