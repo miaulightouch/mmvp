@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 
 const STAGES = { scan: "掃描遊戲檔案", plan: "比對語音", rebuild: "重新打包", commit: "寫入", download: "下載語音包" };
 const STATE_TEXT = {
-  original: "中文（原版）", patched: "日文語音已套用", reverted: "遊戲更新後已還原為中文",
+  original: "韓語（原版）", patched: "日文語音已套用", reverted: "遊戲更新後已還原為韓語",
   missing: "index 不存在（launcher 更新中？）", unknown: "未知",
 };
 
@@ -64,7 +64,7 @@ function render() {
 
   if (v.root_error) banner([text(v.root_error)], "err");
   else if (v.game_running) banner([text("遊戲正在執行中，請先關閉遊戲再套用或還原。"), btn("重新檢查", refresh)]);
-  else if (v.overall === "reverted") banner([text("遊戲更新或修復後，語音已回到中文。"), btn("重新套用", () => run(false))]);
+  else if (v.overall === "reverted") banner([text("遊戲更新或修復後，語音已回到韓語。"), btn("重新套用", () => run(false))]);
   else if (v.overall === "patched" && v.pack && v.applied_pack && v.applied_pack !== v.pack.id)
     banner([text("目前的語音包比已套用的新。"), btn("重新套用", () => run(false))]);
   else if (remote && remote.pack_newer) banner([text(`有新的語音包（${fmtDate(remote.pack.created)} 版）。`), btn("下載", downloadPack)]);
@@ -100,16 +100,16 @@ async function restore() {
   // two-step confirm (window.confirm is not reliable inside the webview)
   if (!restoreArmed) {
     $("restore").textContent = "確定還原？再按一次";
-    restoreArmed = setTimeout(() => { restoreArmed = null; $("restore").textContent = "還原中文語音"; }, 4000);
+    restoreArmed = setTimeout(() => { restoreArmed = null; $("restore").textContent = "還原原版語音"; }, 4000);
     return;
   }
   clearTimeout(restoreArmed);
   restoreArmed = null;
-  $("restore").textContent = "還原中文語音";
+  $("restore").textContent = "還原原版語音";
   setBusy(true);
   try {
     await invoke("restore");
-    log("已還原為中文語音", "ok");
+    log("已還原為韓語語音", "ok");
   } catch (e) {
     log(String(e), "err");
   }
