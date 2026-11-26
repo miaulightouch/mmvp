@@ -18,8 +18,6 @@ use tauri_plugin_dialog::DialogExt;
 struct Settings {
     root: Option<PathBuf>,
     pack: Option<PathBuf>,
-    /// pack id (sha1 of its manifest) last applied successfully
-    applied_pack: Option<String>,
 }
 
 /// Optional `mmvoice.json` next to the exe, written by whoever distributes the installer.
@@ -149,8 +147,7 @@ struct PackInfo {
 #[derive(Serialize)]
 struct PkgView {
     pkg: String,
-    state: String,
-    blob: Option<u16>,
+    state: PkgState,
     redirected: usize,
 }
 
@@ -161,11 +158,15 @@ struct View {
     root_error: Option<String>,
     game_running: bool,
     pkgs: Vec<PkgView>,
-    /// "original" | "patched" | "reverted" | "partial" | "missing" | "unknown"
+    /// "original" | "patched" | "outdated" (applied with another / unknown pack) | "stale" (game files
+    /// changed since apply) | "reverted" (game update put the original index back) | "missing" | "unknown"
     overall: String,
+    /// pack the install was patched with (from the marker), if known
+    applied_pack: Option<String>,
+    applied_created: Option<String>,
+    stale: Vec<String>,
     pack: Option<PackInfo>,
     pack_error: Option<String>,
-    applied_pack: Option<String>,
     update_url: Option<String>,
 }
 
@@ -189,33 +190,59 @@ fn get_view(st: State<AppState>) -> Result<View, String> {
         game_running: false,
         pkgs: Vec::new(),
         overall: "unknown".into(),
+        applied_pack: None,
+        applied_created: None,
+        stale: Vec::new(),
         pack: None,
         pack_error: None,
-        applied_pack: s.applied_pack.clone(),
         update_url: portable().update_url,
     };
+    match find_pack(&s) {
+        None => v.pack_error = Some("找不到語音包（.mmvpack），請選擇檔案或檢查更新".into()),
+        Some(p) => match load_pack(&st, &p) {
+            Ok(pk) => v.pack = Some(PackInfo { path: p.display().to_string(), id: pk.id.clone(), created: pk.manifest.created.clone(), clips: pk.manifest.clips.len() }),
+            Err(e) => v.pack_error = Some(err(e)),
+        },
+    }
     match s.root.as_deref() {
         None => v.root_error = Some("找不到瑪奇 Mobile（台版）安裝位置，請手動選擇".into()),
         Some(root) => {
             v.game_running = patcher::game_running(root);
             match patcher::status(root) {
                 Ok(list) => {
-                    let mut states = Vec::new();
+                    let (mut missing, mut reverted, mut patched, mut unknown_pack) = (false, false, false, false);
                     for p in list {
-                        let (state, blob) = match p.state {
-                            PkgState::Original => ("original", None),
-                            PkgState::Patched(n) => ("patched", Some(n)),
-                            PkgState::Reverted => ("reverted", None),
-                            PkgState::Missing => ("missing", None),
-                        };
-                        states.push(state);
-                        v.pkgs.push(PkgView { pkg: p.pkg, state: state.into(), blob, redirected: p.entries_redirected });
+                        match &p.state {
+                            PkgState::Missing => missing = true,
+                            PkgState::Reverted => reverted = true,
+                            PkgState::Patched { pack_id, pack_created, stale, .. } => {
+                                patched = true;
+                                v.stale.extend(stale.iter().cloned());
+                                match pack_id {
+                                    None => unknown_pack = true,
+                                    Some(id) => {
+                                        if v.applied_pack.as_ref().map_or(false, |a| a != id) {
+                                            unknown_pack = true; // packages patched with different packs
+                                        }
+                                        v.applied_pack = Some(id.clone());
+                                        v.applied_created = pack_created.clone();
+                                    }
+                                }
+                            }
+                            PkgState::Original => {}
+                        }
+                        v.pkgs.push(PkgView { pkg: p.pkg, state: p.state, redirected: p.entries_redirected });
                     }
-                    v.overall = if states.contains(&"missing") {
+                    let current = v.pack.as_ref().map(|p| &p.id);
+                    v.overall = if missing {
                         "missing"
-                    } else if states.contains(&"reverted") {
+                    } else if reverted {
                         "reverted"
-                    } else if states.contains(&"patched") {
+                    } else if !v.stale.is_empty() {
+                        "stale"
+                    } else if patched && (unknown_pack || (current.is_some() && v.applied_pack.as_ref() != current)) {
+                        "outdated"
+                    } else if patched {
                         "patched"
                     } else {
                         "original"
@@ -225,13 +252,6 @@ fn get_view(st: State<AppState>) -> Result<View, String> {
                 Err(e) => v.root_error = Some(err(e)),
             }
         }
-    }
-    match find_pack(&s) {
-        None => v.pack_error = Some("找不到語音包（.mmvpack），請選擇檔案或檢查更新".into()),
-        Some(p) => match load_pack(&st, &p) {
-            Ok(pk) => v.pack = Some(PackInfo { path: p.display().to_string(), id: pk.id.clone(), created: pk.manifest.created.clone(), clips: pk.manifest.clips.len() }),
-            Err(e) => v.pack_error = Some(err(e)),
-        },
     }
     Ok(v)
 }
@@ -289,17 +309,13 @@ struct PatchResult {
 }
 
 fn do_patch(app: &AppHandle, st: &AppState, dry_run: bool) -> Result<PatchResult> {
-    let mut s = load_settings();
+    let s = load_settings();
     let root = s.root.clone().ok_or_else(|| anyhow!("尚未選擇安裝目錄"))?;
     let pack_path = find_pack(&s).ok_or_else(|| anyhow!("找不到語音包"))?;
     let pack = load_pack(st, &pack_path)?;
     let cache = data_dir().join("scan_cache.json");
     let rep = reporter(app);
     let r = patcher::patch(&Options { root: &root, pack: &pack, cache: &cache, rescan: false, dry_run, blob_no: patcher::DEFAULT_BLOB_NO }, &rep)?;
-    if !dry_run {
-        s.applied_pack = Some(pack.id.clone());
-        save_settings(&s)?;
-    }
     Ok(PatchResult { blobs: r.blobs, bundles: r.bundles, clips: r.clips })
 }
 
@@ -321,10 +337,7 @@ async fn restore(app: AppHandle) -> Result<(), String> {
         let _g = begin(&st)?;
         let root = load_settings().root.ok_or("尚未選擇安裝目錄")?;
         let rep = reporter(&app);
-        patcher::restore(&root, &rep).map_err(err)?;
-        let mut s = load_settings();
-        s.applied_pack = None;
-        save_settings(&s).map_err(err)
+        patcher::restore(&root, &rep).map_err(err)
     })
     .await
     .map_err(err)?

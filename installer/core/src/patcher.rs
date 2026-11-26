@@ -118,13 +118,37 @@ pub fn read_pkg_index(root: &Path, pkg: &str) -> Result<PkgIndex> {
     Ok(PkgIndex { pkg: pkg.to_string(), live, live_patched, orig })
 }
 
+/// `<pkg>/index.mmvoice.json`, written next to the index on every apply. The index content stays the
+/// source of truth for "is it patched"; the marker only answers "patched with what, and is it still
+/// current": which pack, which index we wrote, and the size/mtime of every original blob whose
+/// bundles we redirected (a game update that rewrites one of them makes our copy stale).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Marker {
+    pub version: u32,
+    pub pack_id: String,
+    pub pack_created: String,
+    pub app_version: String,
+    pub orig_index_sha1: String,
+    pub index_sha1: String,
+    pub blob: String,
+    /// "pkg/NNNN.blob" -> (size, mtime_ns)
+    pub sources: BTreeMap<String, (u64, u64)>,
+}
+const MARKER: &str = "index.mmvoice.json";
+
+fn read_marker(dir: &Path) -> Option<Marker> {
+    fs::read(dir.join(MARKER)).ok().and_then(|b| serde_json::from_slice(&b).ok())
+}
+
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PkgState {
     /// untouched original
     Original,
-    /// patched; the blob number in use
-    Patched(u16),
-    /// our blobs exist but the index was replaced (game update / launcher repair)
+    /// patched with `blob`. `pack_id` None = no matching marker (unknown pack: re-apply to be sure).
+    /// `stale` = original blobs that changed since apply (game update kept the index): re-apply.
+    Patched { blob: u16, pack_id: Option<String>, pack_created: Option<String>, stale: Vec<String> },
+    /// our blob / marker exists but the index is an original again (game update / launcher repair)
     Reverted,
     Missing,
 }
@@ -148,13 +172,18 @@ pub fn status(root: &Path) -> Result<Vec<PkgStatus>> {
             out.push(PkgStatus { pkg: pkg.to_string(), state: PkgState::Missing, entries_redirected: 0 });
             continue;
         };
+        let marker = read_marker(&dir);
         let (state, n) = if index::is_patched(&live)? {
             let used = index::redirect_blobs(&live)?;
-            let no = used.iter().copied().max().unwrap_or(0);
+            let blob = used.iter().copied().max().unwrap_or(0);
             let n = live[8..].chunks_exact(4).take(u32::from_le_bytes(live[4..8].try_into().unwrap()) as usize)
                 .filter(|c| u16::from_le_bytes([c[0], c[1]]) & index::MASK >= REDIRECT_BASE).count();
-            (PkgState::Patched(no), n)
-        } else if !our_blobs(&dir).is_empty() {
+            let m = marker.filter(|m| m.index_sha1 == audio::sha1_hex(&live));
+            let stale = m.as_ref().map(|m| {
+                m.sources.iter().filter(|(rel, &(size, mtime))| stat(&root.join(rel)).ok() != Some((size, mtime))).map(|(r, _)| r.clone()).collect()
+            }).unwrap_or_default();
+            (PkgState::Patched { blob, pack_id: m.as_ref().map(|m| m.pack_id.clone()), pack_created: m.map(|m| m.pack_created), stale }, n)
+        } else if !our_blobs(&dir).is_empty() || marker.is_some() {
             (PkgState::Reverted, 0)
         } else {
             (PkgState::Original, 0)
@@ -499,12 +528,36 @@ pub fn patch(o: &Options, report: Report) -> Result<PatchSummary> {
             keep = Some(w.path.clone());
         }
         write_atomic(&dir.join("index"), &new_idx)?;
+        let name = keep.as_ref().map(|p| p.file_name().unwrap().to_string_lossy().into_owned());
+        match &name {
+            Some(blob) => {
+                let mut sources = BTreeMap::new();
+                for it in plan.pkgs.get(pkg).into_iter().flatten() {
+                    if !sources.contains_key(&it.rel) {
+                        sources.insert(it.rel.clone(), stat(&o.root.join(&it.rel))?);
+                    }
+                }
+                let m = Marker {
+                    version: 1,
+                    pack_id: o.pack.id.clone(),
+                    pack_created: o.pack.manifest.created.clone(),
+                    app_version: env!("CARGO_PKG_VERSION").into(),
+                    orig_index_sha1: audio::sha1_hex(&ix.orig),
+                    index_sha1: audio::sha1_hex(&new_idx),
+                    blob: blob.clone(),
+                    sources,
+                };
+                write_atomic(&dir.join(MARKER), &serde_json::to_vec_pretty(&m)?)?;
+            }
+            None => {
+                let _ = fs::remove_file(dir.join(MARKER));
+            }
+        }
         for (_, p) in our_blobs(&dir) {
             if Some(&p) != keep.as_ref() {
                 fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             }
         }
-        let name = keep.as_ref().map(|p| p.file_name().unwrap().to_string_lossy().into_owned());
         report(Event::Info(format!("{pkg}: {}，{changed} 條 index 重導向", name.clone().unwrap_or_else(|| "還原為原始 index".into()))));
         summary.per_pkg.push((pkg.clone(), name, changed));
     }
@@ -534,6 +587,7 @@ pub fn restore(root: &Path, report: Report) -> Result<()> {
             fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             report(Event::Info(format!("{pkg}: 刪除 {}", p.file_name().unwrap().to_string_lossy())));
         }
+        let _ = fs::remove_file(dir.join(MARKER));
     }
     Ok(())
 }
