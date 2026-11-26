@@ -1,7 +1,7 @@
 """Mabinogi Mobile voice pack: dump voices from one client, patch them into another.
 
   python tools/mmvoice.py dump    <jp_root> <pack> [--filter REGEX] [--jobs N]
-  python tools/mmvoice.py patch   <tw_root> <pack> [--jobs N] [--dry-run]
+  python tools/mmvoice.py patch   <tw_root> <pack> [--jobs N] [--dry-run] [--rescan]
   python tools/mmvoice.py restore <tw_root> [--keep-blobs]
   python tools/mmvoice.py status  <tw_root>
 
@@ -15,17 +15,24 @@ Pack format (.mmvpack = plain ZIP, stored, no compression since audio is already
   so a TW copy of a clip gets the JP copy from the same bundle; only unknown bundles use "default".
 
 patch (index redirect, original NNNN.blob files are never modified):
-  * scans every original TW blob in parallel; a bundle needs patching if one of its AudioClips has a
-    container path in the pack AND its bytes differ from the pack's bytes;
-  * all patched bundles of a package go into one new blob, 9876.blob by default (--single N;
-    re-runs alternate 9876/9877: new blob written first, index swapped, old blob deleted last);
-    the game names blobs with "{0:0000}.blob", so the name must stay numeric;
-  * a bundle that fails to parse or patch is skipped with a warning (stays TW original);
-  * --dry-run only decides what to patch, it does not repack;
-  * the package's `index` ((u16 blob, u16 slot) per asset) is rewritten to point at the new slots;
-  * restore = put the original index back (and delete the redirect blobs). A launcher repair or
-    game update that replaces `index` also reverts the mod; just run patch again.
-  * backups and state.json live in --data (default ./mmvoice_data).
+  1. scan    parallel, one task per original TW blob: for every bundle with AudioClips record
+             (slot, bundle name, {container path: sha1}). Pack-independent, cached in
+             <data>/scan_cache.json keyed by (blob path, size, mtime); later runs rescan only changed
+             blobs. A bundle that fails to parse is skipped with a warning (stays TW original).
+  2. plan    in memory: a bundle needs patching if any clip's JP sha1 (pack lookup) differs from TW's.
+             --dry-run stops here.
+  3. rebuild parallel, one task per bundle to patch; workers return the repacked bundle and the main
+             process appends it straight into <pkg>/<N>.blob.mmvoice.tmp (new slot = arrival order,
+             offset table written last). No staging copies. Any failure aborts before the game
+             directory is changed (the .tmp files are removed).
+  4. commit  per package: rename the new blob into place under the number the live index does NOT
+             use (N / N+1 alternate, default 9876/9877), atomically swap `index`, then delete the
+             previous run's blob. An interruption at any point leaves the index pointing at files
+             that exist.
+  The game names blobs with "{0:0000}.blob", so the name must stay numeric.
+  restore = put the original index back (and delete the redirect blobs). A launcher repair or game
+  update that replaces `index` also reverts the mod; just run patch again.
+  Backups, state.json and the scan cache live in --data (default ./mmvoice_data).
 """
 import argparse
 import glob
@@ -44,7 +51,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 sys.path.insert(0, os.path.dirname(__file__))
 from blob import BLOB_MAGIC, read_blob_table  # noqa: E402
 
-REDIRECT_BASE = 5000  # redirect blob number = REDIRECT_BASE + original number (max original ~800)
+REDIRECT_BASE = 5000  # blobs numbered >= this are ours and never scanned (max original ~800)
+SCAN_VERSION = 1
 
 PACKAGES = ["AssetPackages", "AssetPackages/Starter", "ResourcesPackage",
             "ResourcesPackage/Starter", "PlatformResourcePackages"]
@@ -87,6 +95,13 @@ def iter_audio_bundles(path):
                 yield i, data
 
 
+def read_slot(path, slot):
+    s, e = read_blob_table(path)[slot]
+    with open(path, "rb") as f:
+        f.seek(s)
+        return f.read(e - s)
+
+
 def game_running():
     out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {GAME_EXE}"], capture_output=True, text=True).stdout
     return GAME_EXE in out
@@ -103,11 +118,18 @@ def run_parallel(fn, items, jobs, label):
     return results
 
 
+def write_json_atomic(path, obj, **kw):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(obj, f, **kw)
+    os.replace(path + ".tmp", path)
+
+
 # ---------------------------------------------------------------- dump
 def _dump_blob(root, rel, pattern):
     """-> rel, [(bundle_name, path, sha1)], {sha1: (fields, data)}"""
     import UnityPy
-    from patch_bundle import bundle_info, clip_bytes
+    from patch_bundle import COPY_FIELDS, bundle_info, clip_bytes
     rx = re.compile(pattern, re.I)
     refs, payloads = [], {}
     for i, data in iter_audio_bundles(os.path.join(root, rel)):
@@ -126,7 +148,6 @@ def _dump_blob(root, rel, pattern):
                 h = sha1_bytes(raw)
                 refs.append((name, path, h))
                 if h not in payloads:
-                    from patch_bundle import COPY_FIELDS
                     payloads[h] = ({k: t[k] for k in COPY_FIELDS if k in t}, raw)
         except Exception as e:  # noqa: BLE001
             print(f"[warn] {rel}#{i}: {e}", file=sys.stderr)
@@ -165,7 +186,7 @@ def cmd_dump(a):
           f"{len(by_bundle)} bundles -> {a.pack} ({os.path.getsize(a.pack) / 2**20:.1f} MB)")
 
 
-# ---------------------------------------------------------------- patch
+# ---------------------------------------------------------------- pack access
 def load_manifest(pack):
     with zipfile.ZipFile(pack) as z:
         m = json.loads(z.read("manifest.json"))
@@ -174,14 +195,14 @@ def load_manifest(pack):
     return m
 
 
-_MAN_CACHE = {}
+_WORKER = {}
 
 
-def _cached_manifest(pack):
-    """Worker processes are reused across blobs: parse the manifest once per process."""
-    if pack not in _MAN_CACHE:
-        _MAN_CACHE[pack] = load_manifest(pack)
-    return _MAN_CACHE[pack]
+def _worker_pack(pack):
+    """Worker processes are reused across tasks: parse the manifest / open the zip once per process."""
+    if _WORKER.get("pack") != pack:
+        _WORKER.update(pack=pack, man=load_manifest(pack), zip=zipfile.ZipFile(pack))
+    return _WORKER["man"], _WORKER["zip"]
 
 
 def lookup(man, bundle_name, path):
@@ -190,104 +211,166 @@ def lookup(man, bundle_name, path):
     return h or man["default"].get(path)
 
 
-def redirect_no(blob_no):
-    return REDIRECT_BASE + blob_no
-
-
 def blob_no(rel):
     return int(os.path.splitext(os.path.basename(rel))[0])
 
 
-def _patch_blob(root, rel, pack, stage, dry_run=False):
-    """Scan one original TW blob. If any bundle needs JP audio, write the patched bundles (only those)
-    to stage/<pkg>/<REDIRECT_BASE+N>.blob and return the slot mapping {orig_slot: new_slot}.
-    A bundle that fails to parse/patch is skipped (left as TW original) and reported, not fatal.
-    dry_run: only decide what needs patching, skip the expensive repack."""
-    from patch_bundle import ClipData, bundle_info, clip_bytes, patch_bundle
+# ---------------------------------------------------------------- patch 1: scan (cached)
+def _scan_blob(root, rel):
+    """Pack-independent facts about one original TW blob.
+    -> rel, {"size", "mtime_ns", "bundles": [[slot, bundle_name, {path: sha1}], ...], "warns": [...]}
+    Only bundles holding AudioClips with a container path are listed; all audio is hashed (no path
+    filter) so the cache stays valid for any pack."""
     import UnityPy
-
-    man = _cached_manifest(pack)
+    from patch_bundle import bundle_info, clip_bytes
     src = os.path.join(root, rel)
-    patched, n_clips, warns = [], 0, []
-    with zipfile.ZipFile(pack) as z:
-        for idx, data in iter_audio_bundles(src):
+    st = os.stat(src)  # taken before reading: a concurrent rewrite changes mtime -> rescanned next time
+    bundles, warns = [], []
+    for idx, data in iter_audio_bundles(src):
+        try:
+            env = UnityPy.load(data)
+            clips = [o for o in env.objects if o.type.name == "AudioClip"]
+            if not clips:
+                continue
+            name, cont = bundle_info(env)
+            hashes = {}
+            for obj in clips:
+                path = cont.get(obj.path_id)
+                if path and path not in hashes:
+                    hashes[path] = sha1_bytes(clip_bytes(obj, obj.read_typetree()))
+            if hashes:
+                bundles.append([idx, name, hashes])
+        except Exception as e:  # noqa: BLE001
+            warns.append(f"{rel}#{idx}: {e!r}")
+    return rel, {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "bundles": bundles, "warns": warns}
+
+
+def scan_install(root, data_dir, jobs, rescan=False):
+    """-> {rel: scan entry} for every original blob, reusing <data>/scan_cache.json where valid."""
+    cache_path = os.path.join(data_dir, "scan_cache.json")
+    cached = {}
+    if not rescan and os.path.exists(cache_path):
+        with open(cache_path, encoding="utf-8") as f:
+            c = json.load(f)
+        if c.get("version") == SCAN_VERSION and c.get("root") == os.path.abspath(root):
+            cached = c["blobs"]
+    blobs = list_blobs(root)
+    scan, todo = {}, []
+    for rel in blobs:
+        e, s = cached.get(rel), os.stat(os.path.join(root, rel))
+        if e and e["size"] == s.st_size and e["mtime_ns"] == s.st_mtime_ns:
+            scan[rel] = e
+        else:
+            todo.append(rel)
+    print(f"scan: {len(blobs)} blobs, {len(scan)} cached, {len(todo)} to scan", file=sys.stderr)
+    if todo:
+        for rel, entry in run_parallel(_scan_blob, [(root, r) for r in todo], jobs, "scan"):
+            scan[rel] = entry
+    if todo or len(scan) != len(cached):
+        write_json_atomic(cache_path, {"version": SCAN_VERSION, "root": os.path.abspath(root),
+                                       "blobs": dict(sorted(scan.items()))}, separators=(",", ":"))
+    for rel in sorted(scan):
+        for w in scan[rel].get("warns", []):
+            print(f"[warn] skipped bundle {w}", file=sys.stderr)
+    return scan
+
+
+# ---------------------------------------------------------------- patch 2: plan
+def plan_patch(scan, man):
+    """-> {pkg: [(rel, slot, {path: jp_sha1}), ...]} in (blob, slot) order."""
+    plan = {}
+    for rel in sorted(scan):
+        for slot, name, hashes in scan[rel]["bundles"]:
+            need = {}
+            for path, cur in hashes.items():
+                h = lookup(man, name, path)
+                if h and h != cur:
+                    need[path] = h
+            if need:
+                plan.setdefault(os.path.dirname(rel), []).append((rel, slot, need))
+    for pkg, items in plan.items():
+        if len(items) > 0xFFFF:
+            sys.exit(f"{pkg}: {len(items)} bundles to patch, more than one blob can address (65535)")
+    return plan
+
+
+# ---------------------------------------------------------------- patch 3: rebuild
+def _rebuild_bundle(root, rel, slot, need, pack):
+    """Repack one TW bundle with JP audio. -> (rel, slot, new_bundle_bytes)"""
+    from patch_bundle import ClipData, patch_bundle
+    man, z = _worker_pack(pack)
+    jp = {p: ClipData(man["clips"][h], z.read(f"clips/{h}")) for p, h in need.items()}
+    new, n = patch_bundle(read_slot(os.path.join(root, rel), slot), jp)
+    if n < len(need):
+        raise RuntimeError(f"{rel}#{slot}: replaced {n} of {len(need)} clips (blob changed since scan?)")
+    return rel, slot, new
+
+
+class BlobWriter:
+    """Append-only .blob writer: bundles go in as they arrive, the offset table is written on finish()."""
+
+    def __init__(self, path, count):
+        self.path, self.tmp, self.count = path, path + ".mmvoice.tmp", count
+        self.hdr_end = 8 + 4 * count
+        self.ends, self.pos = [], self.hdr_end
+        self.f = open(self.tmp, "wb")
+        self.f.seek(self.hdr_end)
+
+    def append(self, data):
+        self.f.write(data)
+        self.pos += len(data)
+        if self.pos >= 1 << 32:
+            raise ValueError(f"{self.path}: would exceed 4 GiB")
+        self.ends.append(self.pos)
+        return len(self.ends) - 1  # slot
+
+    def finish(self):
+        if len(self.ends) != self.count:
+            raise RuntimeError(f"{self.path}: {len(self.ends)} of {self.count} bundles written")
+        self.f.seek(0)
+        self.f.write(struct.pack("<II", BLOB_MAGIC, self.hdr_end))
+        self.f.write(struct.pack(f"<{self.count}I", *self.ends))
+        self.f.close()
+
+    def abort(self):
+        self.f.close()
+        if os.path.exists(self.tmp):
+            os.remove(self.tmp)
+
+
+def rebuild(a, plan, numbers):
+    """Rebuild every planned bundle in parallel straight into <pkg>/<numbers[pkg]>.blob.mmvoice.tmp.
+    -> ({pkg: BlobWriter}, {pkg: {(blob_no, slot): (new_blob_no, new_slot)}})"""
+    writers, redirect = {}, {pkg: {} for pkg in plan}
+    tasks = [(a.root, rel, slot, need, a.pack) for items in plan.values() for rel, slot, need in items]
+    t0, total = time.time(), len(tasks)
+    try:
+        for pkg, items in plan.items():
+            writers[pkg] = BlobWriter(os.path.join(a.root, pkg, f"{numbers[pkg]:04d}.blob"), len(items))
+        with ProcessPoolExecutor(a.jobs) as ex:
+            futs = {ex.submit(_rebuild_bundle, *t) for t in tasks}
             try:
-                env = UnityPy.load(data)
-                clips = [o for o in env.objects if o.type.name == "AudioClip"]
-                if not clips:
-                    continue
-                name, cont = bundle_info(env)
-                need = {}
-                for obj in clips:
-                    path = cont.get(obj.path_id)
-                    h = lookup(man, name, path) if path else None
-                    if not h:
-                        continue
-                    if sha1_bytes(clip_bytes(obj, obj.read_typetree())) != h:
-                        need[path] = ClipData(man["clips"][h], None if dry_run else z.read(f"clips/{h}"))
-                if not need:
-                    continue
-                if dry_run:
-                    patched.append((idx, None))
-                    n_clips += len(need)
-                else:
-                    new, n = patch_bundle(data, need)
-                    patched.append((idx, new))
-                    n_clips += n
-            except Exception as e:  # noqa: BLE001
-                warns.append(f"{rel}#{idx}: {e!r}")
-    for w in warns:
-        print(f"[warn] skipped bundle {w}", file=sys.stderr)
-    if not patched:
-        return rel, {}, 0, None
-    if dry_run:
-        return rel, {i: k for k, (i, _b) in enumerate(patched)}, n_clips, "dry-run"
-    pkg = os.path.dirname(rel)
-    out = os.path.join(stage, pkg, f"{redirect_no(blob_no(rel)):04d}.blob")
-    write_blob_from(out, [b for _i, b in patched])
-    return rel, {i: k for k, (i, _b) in enumerate(patched)}, n_clips, out
+                for n, f in enumerate(as_completed(futs), 1):
+                    rel, slot, new = f.result()
+                    futs.discard(f)  # drop the finished future so its bytes can be freed
+                    pkg = os.path.dirname(rel)
+                    redirect[pkg][(blob_no(rel), slot)] = (numbers[pkg], writers[pkg].append(new))
+                    del new
+                    if n % 50 == 0 or n == total:
+                        print(f"[rebuild] {n}/{total}  {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
+            except BaseException:
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise
+        for w in writers.values():
+            w.finish()
+    except BaseException:
+        for w in writers.values():
+            w.abort()
+        raise
+    return writers, redirect
 
 
-def write_blob_from(dst, bundles):
-    hdr_end = 8 + 4 * len(bundles)
-    ends, pos = [], hdr_end
-    for b in bundles:
-        pos += len(b)
-        ends.append(pos)
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    with open(dst + ".tmp", "wb") as w:
-        w.write(struct.pack("<II", BLOB_MAGIC, hdr_end))
-        w.write(struct.pack(f"<{len(ends)}I", *ends))
-        for b in bundles:
-            w.write(b)
-    os.replace(dst + ".tmp", dst)
-
-
-def concat_blobs(srcs, dst):
-    """Concatenate the bundles of several blobs (in order) into one blob, streaming."""
-    tables = [read_blob_table(s) for s in srcs]
-    sizes = [e - s for t in tables for s, e in t]
-    hdr_end = 8 + 4 * len(sizes)
-    ends, pos = [], hdr_end
-    for n in sizes:
-        pos += n
-        ends.append(pos)
-    if pos >= 1 << 32:
-        raise ValueError("merged blob would exceed 4 GiB; use per-blob mode (--single 0)")
-    if len(sizes) > 0xFFFF:
-        raise ValueError("more than 65535 bundles; use per-blob mode (--single 0)")
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    with open(dst + ".tmp", "wb") as w:
-        w.write(struct.pack("<II", BLOB_MAGIC, hdr_end))
-        w.write(struct.pack(f"<{len(ends)}I", *ends))
-        for src, t in zip(srcs, tables):
-            with open(src, "rb") as f:
-                f.seek(t[0][0])
-                shutil.copyfileobj(f, w, 1 << 20)
-    os.replace(dst + ".tmp", dst)
-
-
-# ---------------------------------------------------------------- index
+# ---------------------------------------------------------------- index / state
 INDEX_MAGIC = 0xE6A9C3BA
 
 
@@ -321,67 +404,63 @@ def load_state(data_dir):
 
 
 def save_state(data_dir, st):
-    _, sp = state_paths(data_dir)
-    os.makedirs(data_dir, exist_ok=True)
-    with open(sp + ".tmp", "w", encoding="utf-8") as f:
-        json.dump(st, f, indent=1, sort_keys=True)
-    os.replace(sp + ".tmp", sp)
+    write_json_atomic(state_paths(data_dir)[1], st, indent=1, sort_keys=True)
 
 
+def original_index(a, pkg, st):
+    """-> (rec, original index bytes). Uses our backup if the live index is the one we wrote,
+    otherwise treats the live index as a fresh original (install / update / repair) and backs it up."""
+    base, _ = state_paths(a.data)
+    idx_path = os.path.join(a.root, pkg, "index")
+    bak = os.path.join(base, pkg, "index")
+    if not os.path.exists(idx_path):
+        sys.exit(f"{pkg}/index missing (launcher updating/repairing?); nothing was changed")
+    rec, cur = st.get(pkg), sha1_file(idx_path)
+    if not (rec and cur == rec["patched_sha1"]):
+        os.makedirs(os.path.dirname(bak), exist_ok=True)
+        shutil.copy2(idx_path, bak)
+        rec = {"orig_sha1": cur, "blobs": (rec or {}).get("blobs", [])}
+    with open(bak, "rb") as f:
+        return rec, f.read()
+
+
+# ---------------------------------------------------------------- patch (entry)
 def cmd_patch(a):
+    if not (REDIRECT_BASE <= a.single and a.single + 1 <= 0xFFFF):
+        sys.exit(f"--blob-no must be in [{REDIRECT_BASE}, 65534] (lower numbers would be scanned as originals)")
     if not a.dry_run and game_running():
         sys.exit(f"{GAME_EXE} is running; close the game first.")
-    blobs = list_blobs(a.root)
-    stage = os.path.join(a.data, "stage")
-    shutil.rmtree(stage, ignore_errors=True)
-    print(f"patch: scanning {len(blobs)} original blobs in {a.root}", file=sys.stderr)
-    results = run_parallel(_patch_blob, [(a.root, r, a.pack, stage, a.dry_run) for r in blobs], a.jobs,
-                           "scan" if a.dry_run else "scan+patch")
-    todo = sorted((r for r in results if r[3]), key=lambda r: r[0])
-    print(f"patch: {len(todo)} blobs / {sum(len(r[1]) for r in todo)} bundles / "
-          f"{sum(r[2] for r in todo)} clips need JP audio")
+    man = load_manifest(a.pack)
+    scan = scan_install(a.root, a.data, a.jobs, a.rescan)
+    plan = plan_patch(scan, man)
+    n_blobs = len({rel for items in plan.values() for rel, _s, _n in items})
+    print(f"patch: {n_blobs} blobs / {sum(map(len, plan.values()))} bundles / "
+          f"{sum(len(n) for items in plan.values() for _r, _s, n in items)} clips need JP audio")
     if a.dry_run:
         return
 
-    base, _ = state_paths(a.data)
+    shutil.rmtree(os.path.join(a.data, "stage"), ignore_errors=True)  # leftovers of the old staging design
     st = load_state(a.data)
-    by_pkg = {}
-    for rel, slots, _n, staged in todo:
-        by_pkg.setdefault(os.path.dirname(rel), []).append((rel, slots, staged))
-    # packages patched before but needing nothing now still get their index restored
-    pkgs = sorted(set(by_pkg) | set(st))
+    pkgs = sorted(set(plan) | set(st))  # previously patched packages that need nothing now get restored
+    ctx, numbers = {}, {}
     for pkg in pkgs:
-        idx_rel = os.path.join(pkg, "index")
-        idx_path = os.path.join(a.root, idx_rel)
-        bak = os.path.join(base, idx_rel)
-        rec = st.get(pkg)
-        cur = sha1_file(idx_path)
-        if rec and cur == rec["patched_sha1"]:
-            orig = open(bak, "rb").read()           # we patched it: start from our backup
-        else:
-            os.makedirs(os.path.dirname(bak), exist_ok=True)
-            shutil.copy2(idx_path, bak)              # fresh original (install / update / repair)
-            orig = open(bak, "rb").read()
-            rec = {"orig_sha1": cur, "blobs": (rec or {}).get("blobs", [])}
+        rec, orig = original_index(a, pkg, st)
         old_blobs = list(rec.get("blobs", []))
-        # Crash-safe order: 1) write the new blob under a name the current index does not use,
-        # 2) swap the index atomically, 3) only then delete the previous run's blob.
-        # Two slots (N, N+1) alternate so step 1 never overwrites a file the live index points at.
-        number = a.single if f"{a.single:04d}.blob" not in old_blobs else a.single + 1
-        name = f"{number:04d}.blob"
-        redirect, new_blobs = {}, []
-        items = by_pkg.get(pkg, [])
-        if items:
-            merged, base_slot = [], 0
-            for rel, slots, staged in items:
-                n = blob_no(rel)
-                for s, ns in slots.items():
-                    redirect[(n, s)] = (number, base_slot + ns)
-                merged.append(staged)
-                base_slot += len(slots)
-            concat_blobs(merged, os.path.join(a.root, pkg, name))
+        # the live index may point at <single>.blob: then write <single+1>.blob, and vice versa
+        numbers[pkg] = a.single if f"{a.single:04d}.blob" not in old_blobs else a.single + 1
+        ctx[pkg] = (rec, orig, old_blobs)
+
+    writers, redirect = rebuild(a, plan, numbers) if plan else ({}, {})
+
+    for pkg in pkgs:
+        rec, orig, old_blobs = ctx[pkg]
+        new_blobs = []
+        if pkg in writers:
+            name = f"{numbers[pkg]:04d}.blob"
+            os.replace(writers[pkg].tmp, os.path.join(a.root, pkg, name))
             new_blobs.append(name)
-        new_idx, changed = patch_index(orig, redirect)
+        new_idx, changed = patch_index(orig, redirect.get(pkg, {}))
+        idx_path = os.path.join(a.root, pkg, "index")
         with open(idx_path + ".mmvoice.tmp", "wb") as w:
             w.write(new_idx)
         os.replace(idx_path + ".mmvoice.tmp", idx_path)
@@ -392,9 +471,9 @@ def cmd_patch(a):
             p = os.path.join(a.root, pkg, old)
             if old not in new_blobs and os.path.exists(p):
                 os.remove(p)
-        print(f"patch: {pkg}: {name} ({len(redirect)} bundles), {changed} index entries redirected")
-    shutil.rmtree(stage, ignore_errors=True)
-    print(f"patch: done. Original blobs untouched; index backups in {base}")
+        print(f"patch: {pkg}: {new_blobs[0] if new_blobs else 'no blob'} "
+              f"({len(redirect.get(pkg, {}))} bundles), {changed} index entries redirected")
+    print(f"patch: done. Original blobs untouched; index backups in {state_paths(a.data)[0]}")
 
 
 def cmd_restore(a):
@@ -406,7 +485,7 @@ def cmd_restore(a):
         rec = st[pkg]
         idx_path = os.path.join(a.root, pkg, "index")
         bak = os.path.join(base, pkg, "index")
-        if sha1_file(idx_path) == rec["patched_sha1"]:
+        if os.path.exists(idx_path) and sha1_file(idx_path) == rec["patched_sha1"]:
             shutil.copyfile(bak, idx_path)
             if sha1_file(idx_path) != rec["orig_sha1"]:
                 sys.exit(f"restore verify failed for {pkg}/index")
@@ -420,7 +499,8 @@ def cmd_restore(a):
                     os.remove(p)
             print(f"removed {len(rec.get('blobs', []))} redirect blobs in {pkg}")
         del st[pkg]
-        os.remove(bak)
+        if os.path.exists(bak):
+            os.remove(bak)
         save_state(a.data, st)
 
 
@@ -429,8 +509,13 @@ def cmd_status(a):
     if not st:
         print("not patched")
     for pkg, rec in sorted(st.items()):
-        cur = sha1_file(os.path.join(a.root, pkg, "index"))
-        state = "patched" if cur == rec["patched_sha1"] else "REVERTED/CHANGED (run patch again)"
+        idx_path = os.path.join(a.root, pkg, "index")
+        if not os.path.exists(idx_path):
+            state = "MISSING (launcher updating?)"
+        elif sha1_file(idx_path) == rec["patched_sha1"]:
+            state = "patched"
+        else:
+            state = "REVERTED/CHANGED (run patch again)"
         missing = [b for b in rec.get("blobs", []) if not os.path.exists(os.path.join(a.root, pkg, b))]
         print(f"{pkg}: index {state}; {len(rec.get('blobs', []))} redirect blobs"
               + (f", MISSING {missing}" if missing else ""))
@@ -448,8 +533,9 @@ def main():
     p.add_argument("root")
     p.add_argument("pack")
     p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
-    p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--single", type=int, default=9876,
+    p.add_argument("--dry-run", action="store_true", help="scan + plan only, change nothing")
+    p.add_argument("--rescan", action="store_true", help="ignore the scan cache")
+    p.add_argument("--blob-no", "--single", dest="single", type=int, default=9876,
                    help="blob number for the patched bundles of each package (default 9876; "
                         "N and N+1 alternate between runs so the live index never points at a half-written file)")
     r = sub.add_parser("restore")
@@ -459,7 +545,7 @@ def main():
     s.add_argument("root")
     for x in (p, r, s):
         x.add_argument("--data", default="mmvoice_data",
-                       help="where backups, state.json and staging live (default: ./mmvoice_data)")
+                       help="where backups, state.json and the scan cache live (default: ./mmvoice_data)")
     a = ap.parse_args()
     {"dump": cmd_dump, "patch": cmd_patch, "restore": cmd_restore, "status": cmd_status}[a.cmd](a)
 
