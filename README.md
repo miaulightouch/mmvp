@@ -90,7 +90,7 @@ PlatformResourcePackages/
 
 ```powershell
 # 1. 從 JP 抽出所有語音成一個 pack（預設只抓路徑含 /voice/ 或 _vo_ 的 clip）
-.\.venv\Scripts\python.exe tools\mmvoice.py dump D:\Nexon\MabinogiMobile_JP work\jp_voice.mmvpack
+.\.venv\Scripts\python.exe tools\mmvoice.py dump D:\Nexon\MabinogiMobile_JP work\jp_voice.mmvpack --blacklist data\blacklist.tsv
 # 2. 套到 TW（先關遊戲）；--dry-run 只列出要改什麼
 .\.venv\Scripts\python.exe tools\mmvoice.py patch D:\MabinogiMobile_TW\appdata work\jp_voice.mmvpack --data work\mmvoice_data
 # 3. 查狀態／還原
@@ -99,9 +99,23 @@ PlatformResourcePackages/
 ```
 
 - pack（`.mmvpack`）= 未壓縮 ZIP：`manifest.json`（container path → 內容 SHA1 + AudioClip 格式欄位）+ `clips/<sha1>`（JP 原始 FSB5 bytes）。不依賴 TW 版本。
-- patch 不需要事先的對照表：平行掃 TW 每個 blob，只改「路徑在 pack 裡且內容 SHA1 不同」的 clip 所在 bundle，所以**重跑是冪等的**；TW 更新或 launcher 修復把檔案換回原版後，直接再跑一次 patch 即可。
-- 寫入前原檔備份到 `<data>/backup/<rel>`，`state.json` 記錄原檔與 patched SHA1；restore 只會還原仍是我們寫入版本的檔案。
-- 實測（2026-11-27，16 核 `--jobs 14`）：dump 156 秒 → 7297 clip / 99 MB；patch dry-run 181 秒 → 64 blob / 293 bundle / 7106 clip。
+- **patch 用 index 重導向，不改任何原始 `NNNN.blob`**：
+  - 平行掃 TW 原始 blob，找出「路徑在 pack 裡且內容 SHA1 不同」的 clip 所在 bundle；
+  - 只把這些 bundle 改好寫進新檔 `5NNN.blob`（`5000 + 原編號`）；
+  - 改寫該 package 的 `index`，把 (NNNN, slot) 的條目指向 (5NNN, 新 slot)。
+  - [確認] metadata 中檔名格式字串為 `{0:0000}.blob`，所以新檔名只能是數字，無法用 `JP-NNNN.blob`。
+  - 還原＝放回原 `index`（並刪 5NNN.blob）。launcher 修復或遊戲更新換掉 `index` 時 mod 自然失效，再跑一次 patch 即可。
+  - patch 每次都從原始 index 備份重算，**重跑冪等**。
+- `state.json` 記錄原始／patched index 的 SHA1 與產生的 redirect blob 清單；restore 只還原仍是我們寫入的 index。
+- [確認] 離線驗證（假安裝目錄）：97 個 index 條目被改寫，其餘 bytes（含路徑表）完全相同；redirect blob 內 84 個 clip 與 pack 一致；restore 後 index SHA1 與原檔相同。
+- 實測（2026-11-27，16 核 `--jobs 14`）：dump 156 秒；patch dry-run 約 180 秒 → 63 blob / 289 bundle / 7023 clip。
+
+### Blacklist（`tools/blacklist.py` → `data/blacklist.tsv`）
+
+不需要移植的 clip：兩版 FSB5 bytes SHA1 相同（`identical`），或長度差 ≤ 0.05 秒且反相相消（對齊 ±4096 samples、最小平方增益）殘差 ≤ -30 dB（`null`）。dump 加 `--blacklist data\blacklist.tsv` 即排除。
+
+- [確認] 結果：共同路徑 14005；identical 7250、長度不同 6115、null test 640 個全部判為 different（中位數 ≈ 0 dB，最低 -15.1 dB 是一個 succubus 音效）。
+- 加 blacklist 後語音 pack 從 7297 clip / 99 MB 縮到 6622 clip / 82 MB。
 
 ## 移植流程（第一版，離線驗證用）
 
