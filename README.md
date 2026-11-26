@@ -98,11 +98,13 @@ PlatformResourcePackages/
 .\.venv\Scripts\python.exe tools\mmvoice.py restore D:\MabinogiMobile_TW\appdata --data work\mmvoice_data
 ```
 
-- pack（`.mmvpack`）= 未壓縮 ZIP：`manifest.json`（container path → 內容 SHA1 + AudioClip 格式欄位）+ `clips/<sha1>`（JP 原始 FSB5 bytes）。不依賴 TW 版本。
-- **patch 用 index 重導向，不改任何原始 `NNNN.blob`**：
-  - 平行掃 TW 原始 blob，找出「路徑在 pack 裡且內容 SHA1 不同」的 clip 所在 bundle；
-  - 只把這些 bundle 改好，預設全部合併進單一新檔 `9876.blob`（每個 package 一個，`--single N` 可改編號；`--single 0` 則每個原 blob 各產生 `5000+NNNN.blob`）；
-  - 改寫該 package 的 `index`，把 (NNNN, slot) 的條目指向 (5NNN, 新 slot)。
+- pack（`.mmvpack`）= 未壓縮 ZIP：`manifest.json` + `clips/<sha1>`（JP 原始 FSB5 bytes），格式見下方 Pack v2。不依賴 TW 版本。
+- **patch 用 index 重導向，不改任何原始 `NNNN.blob`**，分四段：
+  1. **掃描**（平行，每個 blob 一個 task）：記錄每個含 AudioClip 的 bundle 的 (slot, bundle 名稱, {路徑: SHA1})。與 pack 無關，存在 `<data>/scan_cache.json`，以 (blob 路徑, size, mtime) 為鍵，之後只重掃有變的 blob（`--rescan` 強制全掃）。
+  2. **規劃**（記憶體）：bundle 內任一 clip 的 JP SHA1 與 TW 不同就列入。`--dry-run` 到此為止。
+  3. **重建**（平行，每個 bundle 一個 task）：worker 回傳重打包後的 bundle，主行程依抵達順序直接 append 進 `<pkg>/9876.blob.mmvoice.tmp`，最後補 offset 表。沒有暫存 blob；任何失敗都在動到遊戲目錄前中止並刪掉 .tmp。
+  4. **提交**：新 blob 用目前 index 沒在用的編號（9876／9877 交替，`--blob-no N` 可改）→ 原子替換 `index` → 最後才刪舊 blob。
+  - 新 blob 內 slot 順序是抵達順序，所以每次產生的檔案 bytes 不保證相同，但每個 index 條目指到的 bundle 內容相同。
   - [確認] metadata 中檔名格式字串為 `{0:0000}.blob`，所以新檔名只能是數字，無法用 `JP-NNNN.blob`。
   - 還原＝放回原 `index`（並刪掉新增的 blob）。launcher 修復或遊戲更新換掉 `index` 時 mod 自然失效，再跑一次 patch 即可。
   - patch 每次都從原始 index 備份重算，**重跑冪等**。
@@ -117,7 +119,7 @@ PlatformResourcePackages/
 - 已移除 blacklist：patch 時本來就逐一比對 SHA1，相同的會自動跳過。
 - 實測：dump 123 秒 → 7297 路徑（87 個有多個 JP 版本）、7380 份內容、101 MB；patch → 64 blob / 283 bundle / 7236 clip，`9876.blob` 約 380 MB。
 - [確認] 9876.blob 比 pack 大，原因是 index 以「整個 bundle」為單位定址：同一段音訊被多個 bundle 內嵌時，每個 bundle 都必須自帶一份，遊戲端無法共用。
-- 安全性：單一 bundle 出錯只跳過並警告；新 blob 先寫好（9876/9877 交替）→ 原子替換 index → 最後才刪舊 blob；`--dry-run` 不重新打包。
+- 安全性：單一 bundle 掃描出錯只跳過並警告；新 blob 先寫好（9876/9877 交替）→ 原子替換 index → 最後才刪舊 blob；`--dry-run` 不重新打包。
 ## 移植流程（第一版，離線驗證用）
 
 1. `scan_audio.py` ×2 + `compare.py` → `work/port_map.tsv`（JP↔TW 對照，每個 TW 實例一行）。
