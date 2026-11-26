@@ -86,12 +86,19 @@ PlatformResourcePackages/
 - monster／UI／bgm 中「大小不同」的少數項目，是在地化差異還是單純版本差異（JP 剛更新過）。
 - 改檔後的完整性檢查：BlackCipher（反作弊）與 launcher 的「修復」是否會偵測／覆蓋修改過的 blob。[推論] 很可能會，需實測。
 
-## 預計移植方式（[推論]，尚未實作）
+## 移植流程（離線部分已實作並驗證）
 
-1. 以 container path 建立 JP ↔ TW 對照表（`tools/scan_audio.py` 產出 TSV）。
-2. 對每個 TW bundle，把其中 AudioClip 的音訊資料換成 JP 對應 clip 的資料（同為 Vorbis/FSB5，可直接搬原始 resource bytes，並更新 `m_Length`、`m_Resource.m_Size` 等欄位）。
-3. 重新打包 bundle → 重建 blob offset table →（如需要）更新 `index`。
-4. 輸出到 `out/`，以覆蓋或旁路載入方式測試。
+1. `scan_audio.py` ×2 + `compare.py` → `work/port_map.tsv`（JP↔TW 對照，每個 TW 實例一行）。
+2. `build.py`：對每個 TW bundle 重建 `.resource` 音訊串流（替換的 clip 用 JP 原始 FSB5 bytes，其餘保留），改寫每個 AudioClip 的 `m_Resource.m_Offset/m_Size` 與格式欄位，LZ4 重新打包；再重建 blob 的 offset 表。輸出到 `out/<package>/<blob>`。
+   - [確認] 73 blob / 308 bundle / 7362 clip，16 核 18 秒；重掃 `out/` 後 7362 個實例的大小與長度全部等於 JP。
+3. [推論] `index` 不用改：它記的是 (blob, bundle 序號)，bundle 數量與順序不變。
+4. 實機測試：尚未進行（需要寫入 TW 安裝目錄）。
+
+### 實機前已知風險
+
+- [確認] launcher 的 `59826-obd-manifest`（zlib 壓縮 JSON）記錄每個檔案分塊的 SHA1；改過的 blob 在「修復」或更新時一定會被判定為不符。[推論] 只要不按修復，平常啟動可能不會檢查，需實測。
+- [確認] UnityPy 重新打包後的 bundle header flags 與原檔不同（原 `0x243` LZ4HC + 開頭 padding，新 `0xC2` LZ4 + block info 在尾端）。[推論] Unity 2021.3 兩種都能讀。
+- BlackCipher 或遊戲本身是否驗證 blob：未知。
 
 ## 目錄
 
@@ -100,6 +107,9 @@ tools/   解析與轉換腳本
   blob.py          .blob 容器讀取
   scan_audio.py    多進程掃描整個安裝的 AudioClip → TSV（--jobs N，16 核約 2 分鐘）
   compare.py       JP/TW 清單比對，輸出移植對照表
+  patch_bundle.py  單一 bundle 的 AudioClip 替換
+  build.py         平行建出所有替換後的 blob 到 out/
+  proto_one.py     單一 bundle 原型與驗證
   extract_clip.py  從指定 bundle 抽出 AudioClip 為 WAV
 docs/    調查筆記
 work/    中間產物（掃描 TSV、樣本），不進 git
