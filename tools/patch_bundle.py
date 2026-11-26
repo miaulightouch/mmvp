@@ -30,23 +30,30 @@ def clip_bytes(obj, tree):
 
 
 def container_map(env):
+    """path_id -> container path, read straight from the AssetBundle object.
+
+    (env.container dereferences every PPtr across files and is ~50x slower.)
+    """
     m = {}
-    for path, ptr in env.container.items():
-        try:
-            m[ptr.path_id] = path
-        except Exception:  # noqa: BLE001
-            pass
+    for obj in env.objects:
+        if obj.type.name != "AssetBundle":
+            continue
+        for path, info in obj.read_typetree()["m_Container"]:
+            asset = info["asset"]
+            if asset["m_FileID"] == 0:
+                m.setdefault(asset["m_PathID"], path)
     return m
 
 
 def read_clips(bundle_bytes, wanted=None):
     """Return {container_path: ClipData} for AudioClips in a bundle."""
     env = UnityPy.load(bundle_bytes)
+    clips = [o for o in env.objects if o.type.name == "AudioClip"]
+    if not clips:
+        return {}
     cont = container_map(env)
     out = {}
-    for obj in env.objects:
-        if obj.type.name != "AudioClip":
-            continue
+    for obj in clips:
         path = cont.get(obj.path_id)
         if not path or (wanted is not None and path not in wanted):
             continue

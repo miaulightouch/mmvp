@@ -86,7 +86,24 @@ PlatformResourcePackages/
 - monster／UI／bgm 中「大小不同」的少數項目，是在地化差異還是單純版本差異（JP 剛更新過）。
 - 改檔後的完整性檢查：BlackCipher（反作弊）與 launcher 的「修復」是否會偵測／覆蓋修改過的 blob。[推論] 很可能會，需實測。
 
-## 移植流程（離線部分已實作並驗證）
+## 一般使用：`tools/mmvoice.py`（dumper + patcher）
+
+```powershell
+# 1. 從 JP 抽出所有語音成一個 pack（預設只抓路徑含 /voice/ 或 _vo_ 的 clip）
+.\.venv\Scripts\python.exe tools\mmvoice.py dump D:\Nexon\MabinogiMobile_JP work\jp_voice.mmvpack
+# 2. 套到 TW（先關遊戲）；--dry-run 只列出要改什麼
+.\.venv\Scripts\python.exe tools\mmvoice.py patch D:\MabinogiMobile_TW\appdata work\jp_voice.mmvpack --data work\mmvoice_data
+# 3. 查狀態／還原
+.\.venv\Scripts\python.exe tools\mmvoice.py status  D:\MabinogiMobile_TW\appdata --data work\mmvoice_data
+.\.venv\Scripts\python.exe tools\mmvoice.py restore D:\MabinogiMobile_TW\appdata --data work\mmvoice_data
+```
+
+- pack（`.mmvpack`）= 未壓縮 ZIP：`manifest.json`（container path → 內容 SHA1 + AudioClip 格式欄位）+ `clips/<sha1>`（JP 原始 FSB5 bytes）。不依賴 TW 版本。
+- patch 不需要事先的對照表：平行掃 TW 每個 blob，只改「路徑在 pack 裡且內容 SHA1 不同」的 clip 所在 bundle，所以**重跑是冪等的**；TW 更新或 launcher 修復把檔案換回原版後，直接再跑一次 patch 即可。
+- 寫入前原檔備份到 `<data>/backup/<rel>`，`state.json` 記錄原檔與 patched SHA1；restore 只會還原仍是我們寫入版本的檔案。
+- 實測（2026-11-27，16 核 `--jobs 14`）：dump 156 秒 → 7297 clip / 99 MB；patch dry-run 181 秒 → 64 blob / 293 bundle / 7106 clip。
+
+## 移植流程（第一版，離線驗證用）
 
 1. `scan_audio.py` ×2 + `compare.py` → `work/port_map.tsv`（JP↔TW 對照，每個 TW 實例一行）。
 2. `build.py`：對每個 TW bundle 重建 `.resource` 音訊串流（替換的 clip 用 JP 原始 FSB5 bytes，其餘保留），改寫每個 AudioClip 的 `m_Resource.m_Offset/m_Size` 與格式欄位，LZ4 重新打包；再重建 blob 的 offset 表。輸出到 `out/<package>/<blob>`。
@@ -107,6 +124,7 @@ tools/   解析與轉換腳本
   blob.py          .blob 容器讀取
   scan_audio.py    多進程掃描整個安裝的 AudioClip → TSV（--jobs N，16 核約 2 分鐘）
   compare.py       JP/TW 清單比對，輸出移植對照表
+  mmvoice.py       dumper / patcher / restore / status（主要入口）
   patch_bundle.py  單一 bundle 的 AudioClip 替換
   build.py         平行建出所有替換後的 blob 到 out/
   proto_one.py     單一 bundle 原型與驗證
