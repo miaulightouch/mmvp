@@ -130,7 +130,12 @@ installer/
 ```
 
 - 演算法與 `tools/mmvoice.py` 相同，差別：
-  - **無狀態**：不需要 `--data`。index 有指向 ≥5000 號 blob 的條目＝已套用；原始 index 一律在 `<pkg>/index.bak`（只會從原始 index 寫入）；package 目錄內 ≥5000 號的 blob 都是我們的。
+  - **狀態跟著安裝目錄走**：不需要 `--data`。index 有指向 ≥5000 號 blob 的條目＝已套用；原始 index 一律在 `<pkg>/index.bak`（只會從原始 index 寫入）；package 目錄內 ≥5000 號的 blob 都是我們的。
+  - **是否需要重新套用**：每次套用在 index 旁寫 `<pkg>/index.mmvoice.json`（用的語音包 id／日期、寫入的 index SHA1、原始 index SHA1、被導向的每個原始 blob 的 size＋mtime）。GUI 依此判斷：
+    - index 被換回原檔（遊戲更新／launcher 修復）→「遊戲更新後已還原為韓語」，按重新套用；
+    - index 沒變但被導向的原始 blob 有變（遊戲更新只改 blob）→「遊戲檔案已更新」，[推論] 這時 9876 裡是舊版 bundle，必須重新套用；
+    - 標記的語音包 id 和目前的語音包不同、或沒有標記 →「不是目前的語音包」；
+    - 有新語音包可下載 → 由 `update.json` 判斷（見下方）。
   - 只重建有換到 JP 的 resource 串流，其他串流原封不動；AudioClip 欄位原地覆寫（[確認] 255 個 bundle、7161 個 AudioClip 換完後物件長度都不變）。
   - 輸出沿用實機驗證過的 UnityPy 格式（flags 0xC2：LZ4、128 KiB 分塊、block info 在尾端；不會變小的分塊存原始資料）。
   - 遊戲是否執行中：以寫入模式開 `MabinogiMobile.exe`，sharing violation 就是在跑（只檢查這個安裝目錄的遊戲，不改任何東西）。

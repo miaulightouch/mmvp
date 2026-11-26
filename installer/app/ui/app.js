@@ -5,6 +5,7 @@ const $ = (id) => document.getElementById(id);
 const STAGES = { scan: "掃描遊戲檔案", plan: "比對語音", rebuild: "重新打包", commit: "寫入", download: "下載語音包" };
 const STATE_TEXT = {
   original: "韓語（原版）", patched: "日文語音已套用", reverted: "遊戲更新後已還原為韓語",
+  outdated: "已套用（不是目前的語音包）", stale: "已套用，但遊戲檔案已更新",
   missing: "index 不存在（launcher 更新中？）", unknown: "未知",
 };
 
@@ -51,8 +52,10 @@ function render() {
   const st = $("state");
   st.className = "pill " + v.overall;
   st.textContent = STATE_TEXT[v.overall] || v.overall;
-  const patched = v.pkgs.filter((p) => p.state === "patched");
-  $("stateDetail").textContent = patched.length ? `${patched.reduce((a, p) => a + p.redirected, 0)} 個資源已導向日文` : "";
+  const patched = v.pkgs.filter((p) => p.state.kind === "patched");
+  $("stateDetail").textContent = patched.length
+    ? `${patched.reduce((a, p) => a + p.redirected, 0)} 個資源已導向日文` + (v.applied_pack ? `，語音包 ${fmtDate(v.applied_created)} 版（${v.applied_pack.slice(0, 10)}）` : "，語音包版本不明")
+    : "";
 
   const ready = v.root && !v.root_error && v.pack && !busy;
   $("apply").disabled = !ready || v.game_running;
@@ -65,8 +68,10 @@ function render() {
   if (v.root_error) banner([text(v.root_error)], "err");
   else if (v.game_running) banner([text("遊戲正在執行中，請先關閉遊戲再套用或還原。"), btn("重新檢查", refresh)]);
   else if (v.overall === "reverted") banner([text("遊戲更新或修復後，語音已回到韓語。"), btn("重新套用", () => run(false))]);
-  else if (v.overall === "patched" && v.pack && v.applied_pack && v.applied_pack !== v.pack.id)
-    banner([text("目前的語音包比已套用的新。"), btn("重新套用", () => run(false))]);
+  else if (v.overall === "stale")
+    banner([text(`遊戲檔案在套用後更新過（${v.stale.length} 個 blob），需要重新套用。`), btn("重新套用", () => run(false))]);
+  else if (v.overall === "outdated")
+    banner([text(v.applied_pack ? "目前的語音包和已套用的不同。" : "無法確認已套用的語音包版本。"), btn("重新套用", () => run(false))]);
   else if (remote && remote.pack_newer) banner([text(`有新的語音包（${fmtDate(remote.pack.created)} 版）。`), btn("下載", downloadPack)]);
   else if (remote && remote.app_newer) banner([text(`有新版程式 v${remote.app.version}。`), btn("前往下載", () => invoke("open_url", { url: remote.app.url }))]);
   else banner(null);
@@ -139,8 +144,7 @@ async function downloadPack() {
   }
   $("progressCard").hidden = true;
   setBusy(false);
-  await refresh();
-  if (view && view.overall === "patched") banner([text("新的語音包已下載。"), btn("重新套用", () => run(false))]);
+  await refresh(); // a patched install now shows "outdated" and offers to re-apply
 }
 
 listen("progress", (e) => {

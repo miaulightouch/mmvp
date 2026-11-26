@@ -21,7 +21,7 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .value { overflow-wrap: anywhere; min-width: 0; }
 .pill { display: inline-block; padding: 1px 10px; border-radius: 999px; border: 1px solid currentColor; font-size: 13px; }
 .pill.patched { color: var(--ok); } .pill.original { color: var(--muted); }
-.pill.reverted, .pill.partial { color: var(--warn); } .pill.missing, .pill.unknown { color: var(--err); }
+.pill.reverted, .pill.outdated, .pill.stale { color: var(--warn); } .pill.missing, .pill.unknown { color: var(--err); }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; }
 button { font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line);
          background: var(--card); color: var(--fg); cursor: pointer; }
