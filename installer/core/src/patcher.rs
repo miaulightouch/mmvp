@@ -505,7 +505,7 @@ pub fn patch(o: &Options, report: Report) -> Result<PatchSummary> {
             }
         }
         let name = keep.as_ref().map(|p| p.file_name().unwrap().to_string_lossy().into_owned());
-        report(Event::Info(format!("{pkg}: {} ，{changed} 條 index 重導向", name.clone().unwrap_or_else(|| "還原為原始 index".into()))));
+        report(Event::Info(format!("{pkg}: {}，{changed} 條 index 重導向", name.clone().unwrap_or_else(|| "還原為原始 index".into()))));
         summary.per_pkg.push((pkg.clone(), name, changed));
     }
     report(Event::Info(format!("完成，耗時 {:.1} 秒", t0.elapsed().as_secs_f64())));

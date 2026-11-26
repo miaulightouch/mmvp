@@ -10,7 +10,8 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "MabiMobile JP Voice",
+        "label": "main",
+        "title": "瑪奇 Mobile 日文語音",
         "width": 720,
         "height": 560,
         "resizable": true
