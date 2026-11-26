@@ -1,7 +1,8 @@
 //! JP voice source: a static site made by tools/dump_site.py (Cloudflare Pages in production,
 //! or a local directory for testing):
 //!   latest.json      {"version": 3, "date", "manifest", "manifest_sha1", "clips", "bytes"}
-//!   manifest.json    {"version": 3, "date", "clips": {sha1: {"size", "fields"}}, "bundles", "default"}
+//!   manifest.json    {"version": 3, "clips": {sha1: {"size", "fields"}}, "bundles", "default"}
+//!                    content only, so its SHA1 (latest.manifest_sha1) identifies the voice version
 //!   clips/<sha1>     raw FSB5 bytes, content-addressed
 //! Clips are downloaded on demand (only those a patch needs) into a local cache and verified by SHA1.
 use crate::audio::sha1_hex;
@@ -37,7 +38,6 @@ pub struct ClipMeta {
 #[derive(Deserialize)]
 pub struct Manifest {
     pub version: u32,
-    pub date: String,
     pub clips: HashMap<String, ClipMeta>,
     pub bundles: HashMap<String, HashMap<String, String>>,
     pub default: HashMap<String, String>,

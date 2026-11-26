@@ -543,7 +543,7 @@ pub fn patch(o: &Options, report: Report) -> Result<PatchSummary> {
                 let m = Marker {
                     version: 1,
                     pack_id: o.voices.id.clone(),
-                    pack_created: o.voices.manifest.date.clone(),
+                    pack_created: o.voices.latest.date.clone(),
                     app_version: env!("CARGO_PKG_VERSION").into(),
                     orig_index_sha1: audio::sha1_hex(&ix.orig),
                     index_sha1: audio::sha1_hex(&new_idx),
