@@ -12,7 +12,8 @@ Pack format (.mmvpack = plain ZIP, stored, no compression since audio is already
 patch (index redirect, original NNNN.blob files are never modified):
   * scans every original TW blob in parallel; a bundle needs patching if one of its AudioClips has a
     container path in the pack AND its bytes differ from the pack's bytes;
-  * patched bundles of NNNN.blob go into a new blob numbered REDIRECT_BASE+NNNN (e.g. 5260.blob);
+  * all patched bundles of a package go into one new blob, 9876.blob by default (--single N);
+    with --single 0 each NNNN.blob gets its own REDIRECT_BASE+NNNN.blob instead (e.g. 5260.blob);
     the game names blobs with "{0:0000}.blob", so the name must stay numeric;
   * the package's `index` ((u16 blob, u16 slot) per asset) is rewritten to point at the new slots;
   * restore = put the original index back (and delete the redirect blobs). A launcher repair or
@@ -213,6 +214,30 @@ def write_blob_from(dst, bundles):
     os.replace(dst + ".tmp", dst)
 
 
+def concat_blobs(srcs, dst):
+    """Concatenate the bundles of several blobs (in order) into one blob, streaming."""
+    tables = [read_blob_table(s) for s in srcs]
+    sizes = [e - s for t in tables for s, e in t]
+    hdr_end = 8 + 4 * len(sizes)
+    ends, pos = [], hdr_end
+    for n in sizes:
+        pos += n
+        ends.append(pos)
+    if pos >= 1 << 32:
+        raise ValueError("merged blob would exceed 4 GiB; use per-blob mode (--single 0)")
+    if len(sizes) > 0xFFFF:
+        raise ValueError("more than 65535 bundles; use per-blob mode (--single 0)")
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst + ".tmp", "wb") as w:
+        w.write(struct.pack("<II", BLOB_MAGIC, hdr_end))
+        w.write(struct.pack(f"<{len(ends)}I", *ends))
+        for src, t in zip(srcs, tables):
+            with open(src, "rb") as f:
+                f.seek(t[0][0])
+                shutil.copyfileobj(f, w, 1 << 20)
+    os.replace(dst + ".tmp", dst)
+
+
 # ---------------------------------------------------------------- index
 INDEX_MAGIC = 0xE6A9C3BA
 
@@ -295,13 +320,27 @@ def cmd_patch(a):
             if os.path.exists(p):
                 os.remove(p)
         redirect, new_blobs = {}, []
-        for rel, slots, staged in by_pkg.get(pkg, []):
-            n, rn = blob_no(rel), redirect_no(blob_no(rel))
-            for s, ns in slots.items():
-                redirect[(n, s)] = (rn, ns)
-            name = os.path.basename(staged)
-            shutil.copyfile(staged, os.path.join(a.root, pkg, name))
+        items = by_pkg.get(pkg, [])
+        if a.single and items:
+            # merge every staged redirect blob of this package into one <single>.blob
+            name = f"{a.single:04d}.blob"
+            merged, base_slot = [], 0
+            for rel, slots, staged in items:
+                n = blob_no(rel)
+                for s, ns in slots.items():
+                    redirect[(n, s)] = (a.single, base_slot + ns)
+                merged.append(staged)
+                base_slot += len(slots)
+            concat_blobs(merged, os.path.join(a.root, pkg, name))
             new_blobs.append(name)
+        else:
+            for rel, slots, staged in items:
+                n, rn = blob_no(rel), redirect_no(blob_no(rel))
+                for s, ns in slots.items():
+                    redirect[(n, s)] = (rn, ns)
+                name = os.path.basename(staged)
+                shutil.copyfile(staged, os.path.join(a.root, pkg, name))
+                new_blobs.append(name)
         new_idx, changed = patch_index(orig, redirect)
         with open(idx_path + ".mmvoice.tmp", "wb") as w:
             w.write(new_idx)
@@ -367,6 +406,9 @@ def main():
     p.add_argument("pack")
     p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--single", type=int, default=9876,
+                   help="put all patched bundles of a package into one <N>.blob (default 9876); "
+                        "0 = one redirect blob per original (5000+NNNN.blob)")
     r = sub.add_parser("restore")
     r.add_argument("root")
     r.add_argument("--keep-blobs", action="store_true", help="only restore index, leave redirect blobs")

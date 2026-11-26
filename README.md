@@ -101,10 +101,10 @@ PlatformResourcePackages/
 - pack（`.mmvpack`）= 未壓縮 ZIP：`manifest.json`（container path → 內容 SHA1 + AudioClip 格式欄位）+ `clips/<sha1>`（JP 原始 FSB5 bytes）。不依賴 TW 版本。
 - **patch 用 index 重導向，不改任何原始 `NNNN.blob`**：
   - 平行掃 TW 原始 blob，找出「路徑在 pack 裡且內容 SHA1 不同」的 clip 所在 bundle；
-  - 只把這些 bundle 改好寫進新檔 `5NNN.blob`（`5000 + 原編號`）；
+  - 只把這些 bundle 改好，預設全部合併進單一新檔 `9876.blob`（每個 package 一個，`--single N` 可改編號；`--single 0` 則每個原 blob 各產生 `5000+NNNN.blob`）；
   - 改寫該 package 的 `index`，把 (NNNN, slot) 的條目指向 (5NNN, 新 slot)。
   - [確認] metadata 中檔名格式字串為 `{0:0000}.blob`，所以新檔名只能是數字，無法用 `JP-NNNN.blob`。
-  - 還原＝放回原 `index`（並刪 5NNN.blob）。launcher 修復或遊戲更新換掉 `index` 時 mod 自然失效，再跑一次 patch 即可。
+  - 還原＝放回原 `index`（並刪掉新增的 blob）。launcher 修復或遊戲更新換掉 `index` 時 mod 自然失效，再跑一次 patch 即可。
   - patch 每次都從原始 index 備份重算，**重跑冪等**。
 - `state.json` 記錄原始／patched index 的 SHA1 與產生的 redirect blob 清單；restore 只還原仍是我們寫入的 index。
 - [確認] 離線驗證（假安裝目錄）：97 個 index 條目被改寫，其餘 bytes（含路徑表）完全相同；redirect blob 內 84 個 clip 與 pack 一致；restore 後 index SHA1 與原檔相同。
@@ -114,8 +114,9 @@ PlatformResourcePackages/
 
 不需要移植的 clip：兩版 FSB5 bytes SHA1 相同（`identical`），或長度差 ≤ 0.05 秒且反相相消（對齊 ±4096 samples、最小平方增益）殘差 ≤ -30 dB（`null`）。dump 加 `--blacklist data\blacklist.tsv` 即排除。
 
-- [確認] 結果：共同路徑 14005；identical 7250、長度不同 6115、null test 640 個全部判為 different（中位數 ≈ 0 dB，最低 -15.1 dB 是一個 succubus 音效）。
-- 加 blacklist 後語音 pack 從 7297 clip / 99 MB 縮到 6622 clip / 82 MB。
+- [確認] 結果（以乾淨 TW 重算）：共同路徑 14005；identical 7175、長度不同 6187、null test 643 個全部判為 different（中位數 ≈ 0 dB，最低約 -15 dB 是一個 succubus 音效）。
+- 加 blacklist 後語音 pack 從 7297 clip / 99 MB 縮到 6701 clip / 83 MB；patch dry-run：64 blob / 293 bundle / 7185 clip。
+- **注意：blacklist 必須用未改過的 TW 計算**。曾在 `0260.blob` 還是 JP 測試版時算過一次，凱汀／諾拉被誤判為 identical，已重算。
 
 ## 移植流程（第一版，離線驗證用）
 
@@ -127,7 +128,7 @@ PlatformResourcePackages/
 
 ### 實機前已知風險
 
-- [確認] launcher 的 `59826-obd-manifest`（zlib 壓縮 JSON）記錄每個檔案分塊的 SHA1；改過的 blob 在「修復」或更新時一定會被判定為不符。[推論] 只要不按修復，平常啟動可能不會檢查，需實測。
+- [確認] launcher 的 `59826-obd-manifest`（zlib 壓縮 JSON，檔名 base64）記錄每個檔案每 4 MiB 分塊的 SHA1；改過的 blob 在「修復」或更新時一定會被判定為不符。[推論] 只要不按修復，平常啟動可能不會檢查，需實測。
 - [確認] UnityPy 重新打包後的 bundle header flags 與原檔不同（原 `0x243` LZ4HC + 開頭 padding，新 `0xC2` LZ4 + block info 在尾端）。[推論] Unity 2021.3 兩種都能讀。
 - BlackCipher 或遊戲本身是否驗證 blob：未知。
 
