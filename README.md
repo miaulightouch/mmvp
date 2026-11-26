@@ -90,7 +90,7 @@ PlatformResourcePackages/
 
 ```powershell
 # 1. 從 JP 抽出所有語音成一個 pack（預設只抓路徑含 /voice/ 或 _vo_ 的 clip）
-.\.venv\Scripts\python.exe tools\mmvoice.py dump D:\Nexon\MabinogiMobile_JP work\jp_voice.mmvpack --blacklist data\blacklist.tsv
+.\.venv\Scripts\python.exe tools\mmvoice.py dump D:\Nexon\MabinogiMobile_JP work\jp_voice.mmvpack
 # 2. 套到 TW（先關遊戲）；--dry-run 只列出要改什麼
 .\.venv\Scripts\python.exe tools\mmvoice.py patch D:\MabinogiMobile_TW\appdata work\jp_voice.mmvpack --data work\mmvoice_data
 # 3. 查狀態／還原
@@ -110,14 +110,14 @@ PlatformResourcePackages/
 - [確認] 離線驗證（假安裝目錄）：97 個 index 條目被改寫，其餘 bytes（含路徑表）完全相同；redirect blob 內 84 個 clip 與 pack 一致；restore 後 index SHA1 與原檔相同。
 - 實測（2026-11-27，16 核 `--jobs 14`）：dump 156 秒；patch dry-run 約 180 秒 → 63 blob / 289 bundle / 7023 clip。
 
-### Blacklist（`tools/blacklist.py` → `data/blacklist.tsv`）
+### Pack v2：路徑＋內容（2026-11-27）
 
-不需要移植的 clip：兩版 FSB5 bytes SHA1 相同（`identical`），或長度差 ≤ 0.05 秒且反相相消（對齊 ±4096 samples、最小平方增益）殘差 ≤ -30 dB（`null`）。dump 加 `--blacklist data\blacklist.tsv` 即排除。
-
-- [確認] 結果（以乾淨 TW 重算）：共同路徑 14005；identical 7175、長度不同 6187、null test 643 個全部判為 different（中位數 ≈ 0 dB，最低約 -15 dB 是一個 succubus 音效）。
-- 加 blacklist 後語音 pack 從 7297 clip / 99 MB 縮到 6701 clip / 83 MB；patch dry-run：64 blob / 293 bundle / 7185 clip。
-- **注意：blacklist 必須用未改過的 TW 計算**。曾在 `0260.blob` 還是 JP 測試版時算過一次，凱汀／諾拉被誤判為 identical，已重算。
-
+- [確認] 兩版同一個 bundle 的 `AssetBundle.m_Name`（如 `dedicated_bundle_7dbd4a02`）相同，所以 TW 的每個 clip 副本會拿「JP 同一個 bundle 裡的那份」；JP 沒有該 bundle 時才用該路徑最常見的 JP 版本。
+- 每種 JP 內容依 SHA1 只存一份（manifest 用 sha1 指向同一份資料）。
+- 已移除 blacklist：patch 時本來就逐一比對 SHA1，相同的會自動跳過。
+- 實測：dump 123 秒 → 7297 路徑（87 個有多個 JP 版本）、7380 份內容、101 MB；patch → 64 blob / 283 bundle / 7236 clip，`9876.blob` 約 380 MB。
+- [確認] 9876.blob 比 pack 大，原因是 index 以「整個 bundle」為單位定址：同一段音訊被多個 bundle 內嵌時，每個 bundle 都必須自帶一份，遊戲端無法共用。
+- 安全性：單一 bundle 出錯只跳過並警告；新 blob 先寫好（9876/9877 交替）→ 原子替換 index → 最後才刪舊 blob；`--dry-run` 不重新打包。
 ## 移植流程（第一版，離線驗證用）
 
 1. `scan_audio.py` ×2 + `compare.py` → `work/port_map.tsv`（JP↔TW 對照，每個 TW 實例一行）。
