@@ -49,8 +49,14 @@ npm run dev                  # 開發模式啟動 GUI
 npm test                     # cargo test；設 MMVP_TEST_ROOT / MMVP_TEST_SOURCE 可跑端到端測試
 npm run dump -- <jp_root> --date YYYY-MM-DD   # 只 dump 語音站台到 work/pages/<日期>
 npm run publish:voices       # dump → 和線上比對 → 有變動才部署（讀 deploy.local.json，可加 -- --dry-run／--force）
-git tag v0.2.0 && git push origin v0.2.0   # 發佈程式：版本寫在 src-tauri/Cargo.toml，由 GitHub Actions 建置
 ```
+
+commit 訊息與 release note 都遵守 [Conventional Commits](https://www.conventionalcommits.org/)（`feat:`、`fix:`、`refactor:`、`docs:`、`ci:` 等；破壞性變更加 `!` 或 `BREAKING CHANGE:` footer）。
+
+發佈程式（版本寫在 `src-tauri/Cargo.toml`）：
+
+1. 在 GitHub 為 tag `vX.Y.Z` 建立 draft release，寫好依 commit 類型分組的 release note。
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`。GitHub Actions 會建置 `mmvp.exe`、上傳到該 draft 並發佈。
 
 技術細節見 [docs/research.md](docs/research.md)。
 

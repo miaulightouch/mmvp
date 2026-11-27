@@ -1,5 +1,10 @@
-# Build mmvp.exe and publish it as a GitHub Release (portable only).
-# Trigger: push a tag vX.Y.Z equal to [workspace.package] version in src-tauri/Cargo.toml.
+# Build mmvp.exe, attach it to the release of the pushed tag, and publish that release (portable only).
+#
+# Releasing:
+#   1. Draft a GitHub release for tag vX.Y.Z (= [workspace.package] version in src-tauri/Cargo.toml)
+#      and write its notes, grouped by Conventional Commits type (Features, Bug Fixes, BREAKING CHANGES).
+#   2. Push the tag vX.Y.Z. This workflow builds, uploads the assets to the draft, then publishes it,
+#      so the "latest" release the self-update reads always has its files.
 #
 # Release assets: mmvp.exe, mmvp.exe.sig (checked by the app's self-update), latest.json {"version"}.
 # Repository settings (Settings > Secrets and variables > Actions):
@@ -22,16 +27,18 @@ jobs:
       run:
         shell: bash
     env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       MMVP_SOURCE: ${{ vars.MMVP_SOURCE }}
       MMVP_REPO: ${{ github.repository }}
       MMVP_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Check tag and configuration
+      - name: Check tag, release and configuration
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != src-tauri/Cargo.toml version $version"; exit 1; }
+          gh release view "$GITHUB_REF_NAME" > /dev/null || { echo "draft the release $GITHUB_REF_NAME with its notes first"; exit 1; }
           [ -n "$MMVP_UPDATER_PUBKEY" ] || { echo "set repository variable TAURI_UPDATER_PUBKEY"; exit 1; }
           [ -n "$MMVP_SOURCE" ] || { echo "set repository variable MMVP_SOURCE"; exit 1; }
           echo "VERSION=$version" >> "$GITHUB_ENV"
@@ -50,9 +57,8 @@ jobs:
       - run: npm test
       - run: npm run build -- --no-bundle
 
-      - name: Sign and publish
+      - name: Sign, upload and publish
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
@@ -60,6 +66,5 @@ jobs:
           cp src-tauri/target/release/mmvp.exe dist/
           npx tauri signer sign dist/mmvp.exe
           echo "{\"version\": \"$VERSION\"}" > dist/latest.json
-          gh release create "$GITHUB_REF_NAME" dist/mmvp.exe dist/mmvp.exe.sig dist/latest.json \
-            --title "mmvp $GITHUB_REF_NAME" \
-            --notes "下載 \`mmvp.exe\`，放在可寫入的資料夾直接執行（免安裝）。程式會自動提示更新。"
+          gh release upload "$GITHUB_REF_NAME" dist/mmvp.exe dist/mmvp.exe.sig dist/latest.json --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

@@ -51,8 +51,14 @@ npm run dev                  # start the GUI in development mode
 npm test                     # cargo test; set MMVP_TEST_ROOT / MMVP_TEST_SOURCE to run the end-to-end test
 npm run dump -- <jp_root> --date YYYY-MM-DD   # only dump the voice site into work/pages/<date>
 npm run publish:voices       # dump -> compare with the live site -> deploy if changed (reads deploy.local.json; -- --dry-run / --force)
-git tag v0.2.0 && git push origin v0.2.0   # release: the version is in src-tauri/Cargo.toml, GitHub Actions builds it
 ```
+
+Commit messages and release notes follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `refactor:`, `docs:`, `ci:` …; `!` or a `BREAKING CHANGE:` footer for breaking changes).
+
+Releasing (the version is in `src-tauri/Cargo.toml`):
+
+1. Draft a GitHub release for the tag `vX.Y.Z` and write its notes, grouped by commit type.
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`. GitHub Actions builds `mmvp.exe`, uploads it to the draft and publishes it.
 
 Technical details are in [docs/research.md](docs/research.md) (Traditional Chinese).
 
