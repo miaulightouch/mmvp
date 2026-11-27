@@ -9,8 +9,8 @@ Mabinogi Mobile Voice Pack (for TW)：把台版《瑪奇 Mobile》的韓語配�
 ## 安裝
 
 1. 從 [Releases](https://github.com/miaulightouch/mmvp/releases/latest) 下載其中一個：
-   - `*-setup.exe`：安裝版（不需要系統管理員權限）
    - `mmvoice-portable.exe`：免安裝，放在可寫入的資料夾直接執行
+   - `*-setup.exe`：安裝版（不需要系統管理員權限）
 2. 關閉遊戲，開啟 **MabiMobile JP Voice**，確認遊戲目錄後按「套用日文語音」。
 3. 要恢復原版，按「還原原版語音」。
 
@@ -18,9 +18,12 @@ Mabinogi Mobile Voice Pack (for TW)：把台版《瑪奇 Mobile》的韓語配�
 
 遊戲資源是一組 `NNNN.blob`（內含 Unity asset bundle）加上一個 `index` 對照表。
 patcher 掃描台版的語音，下載對應的日版語音重新打包成 `9876.blob`，再把 `index` 中對應的條目指向它。
-原始 `index` 保留為 `index.bak`。
+原始 `index` 備份為 `index.bak`。
 
-日版語音放在 [mmvp.lightouch.net](https://mmvp.lightouch.net)，以內容 SHA1 命名，相同內容只下載一次。
+## 手動還原
+
+1. 將 AssetPackages 與 AssetPackages\Starter 中的 index.bak 改回 index
+2. 將 AssetPackages 與 AssetPackages\Starter 中的 9876.blob 移除
 
 ## 開發
 
@@ -34,7 +37,7 @@ docs/        研究筆記與驗證紀錄
 ```
 
 ```powershell
-# 發佈語音（本機）：dump 日版語音 → 有變動才部署到 Cloudflare Pages
+# 發佈語音（本機）：dump 日版語音 → 有變動才部署
 .\tools\publish_voices.ps1
 
 # 發佈 patcher：版本寫在 installer/Cargo.toml，推 tag 由 GitHub Actions 建置並發佈
