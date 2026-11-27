@@ -15,13 +15,19 @@ if (-not (Test-Path $cfgPath)) { throw "missing $cfgPath (gitignored), e.g. {`"p
 $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
 $jp = if ($cfg.jp_root) { $cfg.jp_root } else { 'D:\Nexon\MabinogiMobile_JP' }
 $url = if ($cfg.url) { $cfg.url.TrimEnd('/') } else { "https://$($cfg.project).pages.dev" }
+if ($url -notmatch '^https?://') { $url = "https://$url" }
+$github = $cfg.github
+if (-not $github) {  # fall back to the origin remote, e.g. https://github.com/OWNER/REPO.git
+    $origin = git remote get-url origin 2>$null
+    if ($origin -match 'github\.com[:/](.+?)(\.git)?$') { $github = $Matches[1] }
+}
 
 # the JP launcher deletes index files while it updates / repairs: do not dump a half-written install
 if (-not (Test-Path (Join-Path $jp 'AssetPackages\index'))) { throw "$jp\AssetPackages\index missing: is the JP launcher updating?" }
 
 $date = Get-Date -Format 'yyyy-MM-dd'
 $dumpArgs = @('tools\dump_site.py', $jp, '--date', $date)
-if ($cfg.github) { $dumpArgs += @('--repo', $cfg.github) } else { Write-Warning 'deploy.local.json has no "github": the landing page will not be written' }
+if ($github) { $dumpArgs += @('--repo', $github) } else { Write-Warning 'no "github" in deploy.local.json and no GitHub origin: the landing page will not be written' }
 if ($Jobs -gt 0) { $dumpArgs += @('--jobs', $Jobs) }
 & .\.venv\Scripts\python.exe @dumpArgs
 if ($LASTEXITCODE) { throw "dump failed" }
