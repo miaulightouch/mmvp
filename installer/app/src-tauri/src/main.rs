@@ -4,8 +4,9 @@
 //!
 //! Build-time configuration (set by the release workflow, nothing secret):
 //!   MMVOICE_SOURCE   voice site base URL, e.g. https://mmvoice-jp.pages.dev
+//!   MMVOICE_REPO     GitHub OWNER/REPO, for the portable exe's self-update
 //! Runtime override for testing: environment variable MMVOICE_SOURCE (URL or local directory).
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use mmv_core::patcher::{self, Event, Options, PkgState};
 use mmv_core::voices::{self, Latest, Source, Voices};
 use serde::{Deserialize, Serialize};
@@ -321,11 +322,89 @@ async fn check_app_update(app: AppHandle) -> Result<Option<AppUpdate>, String> {
     Ok(u.map(|u| AppUpdate { version: u.version.clone(), notes: u.body.clone() }))
 }
 
+/// Installed by the NSIS setup (it puts uninstall.exe next to the exe) or run as a portable exe.
+fn is_portable() -> bool {
+    let exe = std::env::current_exe().unwrap_or_default();
+    !exe.parent().map_or(false, |d| d.join("uninstall.exe").exists())
+}
+
+/// Portable update asset: release workflow publishes `mmvoice-portable.exe` (+ `.sig`) in every release.
+fn portable_url(version: &str) -> Option<String> {
+    if let Some(base) = std::env::var("MMVOICE_PORTABLE_BASE").ok().filter(|s| !s.is_empty()) {
+        return Some(format!("{}/mmvoice-portable.exe", base.trim_end_matches('/'))); // testing
+    }
+    let repo = option_env!("MMVOICE_REPO").filter(|s| !s.is_empty())?;
+    Some(format!("https://github.com/{repo}/releases/download/v{version}/mmvoice-portable.exe"))
+}
+
+fn http_get(url: &str, app: &AppHandle, report: bool) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let resp = ureq::get(url).call().map_err(|e| anyhow!("下載 {url} 失敗：{e}"))?;
+    let total: usize = resp.header("Content-Length").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let mut r = resp.into_reader();
+    let mut out = Vec::with_capacity(total);
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = r.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n]);
+        if report {
+            let _ = app.emit("progress", Progress { stage: "app".into(), done: out.len() >> 10, total: total >> 10 });
+        }
+    }
+    Ok(out)
+}
+
+/// Verify a Tauri updater signature (.sig = base64 of a minisign signature) with the configured pubkey.
+fn verify_signature(app: &AppHandle, data: &[u8], sig_b64: &[u8]) -> Result<()> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let pubkey = app.config().plugins.0.get("updater").and_then(|u| u.get("pubkey")).and_then(|p| p.as_str()).unwrap_or_default();
+    if pubkey.is_empty() {
+        bail!("這個版本沒有設定更新公鑰");
+    }
+    let pk_text = String::from_utf8(b64.decode(pubkey.trim())?)?;
+    let pk = minisign_verify::PublicKey::decode(&pk_text).map_err(|e| anyhow!("公鑰格式錯誤：{e}"))?;
+    let sig_text = String::from_utf8(b64.decode(String::from_utf8_lossy(sig_b64).trim())?)?;
+    let sig = minisign_verify::Signature::decode(&sig_text).map_err(|e| anyhow!("簽章格式錯誤：{e}"))?;
+    pk.verify(data, &sig, true).map_err(|e| anyhow!("簽章驗證失敗：{e}"))?;
+    Ok(())
+}
+
+/// Portable self-update: download the new exe and its signature, verify, swap the running exe
+/// (Windows allows renaming a running exe), start the new one and exit.
+fn portable_update(app: &AppHandle, version: &str) -> Result<()> {
+    let url = portable_url(version).ok_or_else(|| anyhow!("這個版本沒有設定更新來源"))?;
+    let sig = http_get(&format!("{url}.sig"), app, false)?;
+    let exe_bytes = http_get(&url, app, true)?;
+    verify_signature(app, &exe_bytes, &sig)?;
+    let exe = std::env::current_exe()?;
+    let new = exe.with_extension("exe.new");
+    let old = exe.with_extension("exe.old");
+    fs::write(&new, &exe_bytes)?;
+    let _ = fs::remove_file(&old);
+    fs::rename(&exe, &old).map_err(|e| anyhow!("無法替換執行檔（資料夾沒有寫入權限？）：{e}"))?;
+    if let Err(e) = fs::rename(&new, &exe) {
+        let _ = fs::rename(&old, &exe);
+        bail!("無法替換執行檔：{e}");
+    }
+    std::process::Command::new(&exe).spawn()?;
+    app.exit(0);
+    Ok(())
+}
+
 #[tauri::command]
 async fn install_app_update(app: AppHandle) -> Result<(), String> {
     let st = app.state::<AppState>();
     let _g = begin(&st)?;
     let Some(u) = app.updater().map_err(err)?.check().await.map_err(err)? else { return Ok(()) };
+    if is_portable() {
+        let version = u.version.clone();
+        let app2 = app.clone();
+        return tauri::async_runtime::spawn_blocking(move || portable_update(&app2, &version).map_err(err)).await.map_err(err)?;
+    }
     let mut got = 0usize;
     u.download_and_install(
         |chunk, total| {
@@ -340,6 +419,20 @@ async fn install_app_update(app: AppHandle) -> Result<(), String> {
 }
 
 fn main() {
+    // leftover from a portable self-update: the old process may still be exiting, so retry for a while
+    if let Ok(exe) = std::env::current_exe() {
+        let old = exe.with_extension("exe.old");
+        if old.exists() {
+            std::thread::spawn(move || {
+                for _ in 0..30 {
+                    if fs::remove_file(&old).is_ok() || !old.exists() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            });
+        }
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

@@ -68,21 +68,27 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           MMVOICE_SOURCE: ${{ vars.MMVOICE_SOURCE }}
+          MMVOICE_REPO: ${{ github.repository }}
         with:
           projectPath: installer/app
           tauriScript: npx tauri
           args: --config ${{ runner.temp }}/updater.json
           tagName: ${{ github.ref_name }}
           releaseName: "瑪奇 Mobile 日文語音 ${{ github.ref_name }}"
-          releaseBody: "下載 `*-setup.exe` 安裝（不需要系統管理員權限）。已安裝的版本會自動提示更新。"
+          releaseBody: "`*-setup.exe`：安裝版（不需要系統管理員權限）。`mmvoice-portable.exe`：免安裝，直接執行。兩者都會自動提示更新。"
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
 
-      - name: Attach CLI
+      - name: Attach portable exe (same binary, signed for self-update)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        working-directory: installer
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        working-directory: installer/app
         run: |
-          cargo build --release -p mmv-cli
-          gh release upload "${{ github.ref_name }}" target/release/mmvoice-rs.exe --clobber
+          $p = "$env:RUNNER_TEMP/mmvoice-portable.exe"
+          Copy-Item ../target/release/mmvoice.exe $p
+          npx tauri signer sign $p
+          if (-not (Test-Path "$p.sig")) { throw "signing failed" }
+          gh release upload "${{ github.ref_name }}" $p "$p.sig" --clobber
