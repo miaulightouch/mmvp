@@ -52,7 +52,22 @@ fn normalize_root(p: &Path) -> Option<PathBuf> {
     None
 }
 
+/// TW is installed through the Nexon Launcher, which records it in
+/// %APPDATA%\NexonLauncher\installed-apps.db (JSON): installedApps["59826"].installPath.
+/// [確認] 59826 is the TW client (its manifest is appdata\59826-obd-manifest).
+fn detect_root_nexon() -> Option<PathBuf> {
+    let db = PathBuf::from(std::env::var_os("APPDATA")?).join("NexonLauncher").join("installed-apps.db");
+    let v: serde_json::Value = serde_json::from_slice(&fs::read(db).ok()?).ok()?;
+    let apps = v.get("installedApps")?.as_object()?;
+    let mut candidates: Vec<&serde_json::Value> = apps.get("59826").into_iter().collect();
+    candidates.extend(apps.values().filter(|a| a.get("name").and_then(|n| n.as_str()).map_or(false, |n| n.starts_with("MabinogiMobile"))));
+    candidates.into_iter().filter_map(|a| a.get("installPath")?.as_str().and_then(|p| normalize_root(Path::new(p)))).next()
+}
+
 fn detect_root() -> Option<PathBuf> {
+    if let Some(r) = detect_root_nexon() {
+        return Some(r);
+    }
     use winreg::enums::*;
     use winreg::RegKey;
     let hives = [
