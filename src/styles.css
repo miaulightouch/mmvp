@@ -8,6 +8,7 @@
           --accent: #e0606f; --ok: #5cc28a; --warn: #e0a43a; --err: #ff7a70; }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--fg);
        font: 14px/1.5 "Segoe UI", "Microsoft JhengHei UI", "Microsoft JhengHei", sans-serif; }
 main { max-width: 720px; margin: 0 auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; }

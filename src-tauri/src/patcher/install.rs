@@ -1,4 +1,5 @@
-//! A TW install: status, apply, restore.
+//! A client install (TW; any other region's client with the same layout works the same way, unverified):
+//! status, apply, restore.
 //!
 //! Apply = scan the referenced audio bundles, download the JP clips that differ, rebuild those bundles
 //! into `<pkg>/9876.blob` (or 9877, whichever the live index does not use) and redirect every index

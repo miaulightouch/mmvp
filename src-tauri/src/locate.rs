@@ -29,6 +29,13 @@ fn nexon_launcher() -> Option<PathBuf> {
     normalize(Path::new(v.get("installedApps")?.get("59826")?.get("installPath")?.as_str()?)).ok()
 }
 
+/// True unless `root` is the TW install the Nexon Launcher records. Any folder with the same layout can
+/// be picked by hand, which lets clients of other regions be tried; only TW is verified.
+pub fn experimental(root: &Path) -> bool {
+    let same = |tw: PathBuf| matches!((fs::canonicalize(tw), fs::canonicalize(root)), (Ok(a), Ok(b)) if a == b);
+    !nexon_launcher().is_some_and(same)
+}
+
 /// The folder the user picked if still valid, else the Nexon Launcher's record.
 pub fn root() -> Option<PathBuf> {
     let saved: Settings = fs::read(data_dir().join("settings.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();

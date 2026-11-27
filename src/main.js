@@ -3,7 +3,7 @@ const { listen } = window.__TAURI__.event;
 const $ = (id) => document.getElementById(id);
 
 const STEPS = { scan: "掃描遊戲檔案", download: "下載日文語音", rebuild: "重新打包", commit: "寫入", app: "下載新版程式" };
-const STATES = { original: "韓語（原版）", patched: "日文語音已套用", reverted: "遊戲更新後已還原為韓語", missing: "遊戲正在更新" };
+const STATES = { original: "原版語音", patched: "日文語音已套用", reverted: "遊戲更新後已還原為原版語音", missing: "遊戲正在更新" };
 
 let view = null;      // local state from the backend
 let voices = null;    // latest voice version on the site
@@ -40,6 +40,7 @@ function render() {
   const s = view.status;
   $("ver").textContent = "v" + view.version;
   $("root").textContent = view.root || "—";
+  $("experimental").hidden = !view.experimental;
   $("voices").textContent = voices ? `${date(voices.date)} 版，${voices.clips} 段（${mb(voices.bytes)} MB）` : "檢查中…";
   $("state").className = "pill " + (s ? s.state : "missing");
   $("state").textContent = s ? STATES[s.state] : "—";
@@ -57,7 +58,7 @@ function render() {
   const run = () => apply();
   if (view.error) banner(view.error, null, null, "err");
   else if (view.game_running) banner("遊戲正在執行，請先關閉遊戲。", refresh, "重新檢查");
-  else if (s.state === "reverted") banner("遊戲更新後語音回到韓語。", run, "重新套用");
+  else if (s.state === "reverted") banner("遊戲更新後語音回到原版。", run, "重新套用");
   else if (s.stale) banner("遊戲檔案在套用後有更新，需要重新套用。", run, "重新套用");
   else if (outdated) banner(s.voice ? `有新的日文語音（${date(voices.date)} 版）。` : "無法確認已套用的語音版本。", run, s.voice ? "更新" : "重新套用");
   else if (update) banner(`有新版程式 v${update}。`, installUpdate, "更新並重新啟動");
@@ -104,7 +105,7 @@ function restore() {
     return;
   }
   disarm();
-  task(async () => { await invoke("restore"); log("已還原為原版（韓語）語音", "ok"); });
+  task(async () => { await invoke("restore"); log("已還原為原版語音", "ok"); });
 }
 
 const installUpdate = () => task(() => invoke("install_update"));

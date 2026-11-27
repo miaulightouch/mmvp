@@ -1,6 +1,6 @@
 # 技術筆記
 
-遊戲檔案的格式，以及 mmvp 怎麼利用它們。使用方式見 [README](../README.md)。
+遊戲檔案的格式，以及 mmvp 怎麼利用它們。使用方式見 [README](../README_zh-tw.md)。
 除非標註「推論」，以下內容都經過實際解析或實機驗證。
 
 ## 遊戲檔案
@@ -98,6 +98,7 @@ Release 只有 `mmvp.exe`、它的簽章 `mmvp.exe.sig`，以及 `latest.json`�
 
 ## 已知限制
 
+- 只有台版經過驗證。手動選擇的目錄只要有 `AssetPackages\index` 就會被接受，不是 Nexon Launcher 登記的台版時介面標示「實驗性」。推論：其他地區的版本若沿用相同的封包格式、bundle 名稱與資產路徑就能套用；遊戲執行檔若不叫 `MabinogiMobile.exe`，「遊戲執行中」的偵測會失效。
 - launcher 的「修復」會把 `index` 換回原版，mod 就會失效，重新套用即可。
 - 推論：反作弊（BlackCipher）或 launcher 是否會檢查新增的 blob，目前未知。實機使用至今沒有問題。
 

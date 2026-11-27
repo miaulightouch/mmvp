@@ -1,52 +1,61 @@
 # mmvp
 
-Mabinogi Mobile Voice Pack (for TW)：把台版《瑪奇 Mobile》的韓語配音換成日版配音。
+**English** | [繁體中文](README_zh-tw.md)
 
-- 只替換語音，不修改任何原始遊戲檔案，隨時可以還原
-- 首次下載約 100 MB，之後只下載有變動的語音
-- 遊戲更新或語音更新時會提示重新套用，程式本身會自動更新
+Mabinogi Mobile Voice Pack (for TW): replaces the Korean voice-over of the Taiwanese *Mabinogi Mobile* client with the Japanese one.
 
-## 安裝
+- Only voices are replaced. No original game file is modified, and you can restore at any time.
+- The first download is about 100 MB; after that only changed voices are downloaded.
+- You are prompted to re-apply after a game update or a voice update. The program updates itself.
 
-1. 從 [Releases](https://github.com/miaulightouch/mmvp/releases/latest) 下載 `mmvp.exe`，放在可寫入的資料夾直接執行（免安裝）。
-2. 關閉遊戲，確認遊戲目錄後按「套用日文語音」。
-3. 要恢復原版，按「還原原版語音」。
+The interface is in Traditional Chinese.
 
-## 運作方式
+## Install
 
-遊戲資源是一組 `NNNN.blob`（內含 Unity asset bundle）加上 `index`（資產與相依 bundle 的位置表）。
-mmvp 找出含有語音的 bundle，換上日版語音後重新打包成 `9876.blob`（重新套用時與 `9877.blob` 輪替），再把 `index` 中所有指向這些 bundle 的位置改到新檔。
-原始 `index` 備份為 `index.bak`。
+1. Download `mmvp.exe` from [Releases](https://github.com/miaulightouch/mmvp/releases/latest), put it in a writable folder and run it (no installer).
+2. Close the game, check the game folder, then press 「套用日文語音」 (apply Japanese voices).
+3. To go back to the original voices, press 「還原原版語音」 (restore original voices).
 
-## 手動還原
+### Clients of other regions (experimental)
 
-1. 將 AssetPackages 與 AssetPackages\Starter 中的 index.bak 改回 index
-2. 將 AssetPackages 與 AssetPackages\Starter 中的 9876.blob（或 9877.blob）與 index.mmvp.json 移除
+mmvp finds the Taiwanese client installed by the Nexon Launcher on its own. A client of another region can be tried as well, as long as it has the same file layout (`AssetPackages\index` inside the game folder): press 「變更…」 (change) and pick its game folder. The interface then marks it 「實驗性」 (experimental).
+Only the Taiwanese client has been verified in game. Whether other clients work is unknown.
 
-## 開發
+## How it works
 
-標準 Tauri 2 專案：
+Game resources are a set of `NNNN.blob` files (each holding Unity asset bundles) plus an `index` (the location table of assets and of the bundles they depend on).
+mmvp finds the bundles that contain voices, puts the Japanese voices in, repacks them into `9876.blob` (alternating with `9877.blob` on re-apply), and points every `index` location of those bundles to the new file.
+The original `index` is kept as `index.bak`.
+
+## Restoring by hand
+
+1. In `AssetPackages` and `AssetPackages\Starter`, rename `index.bak` back to `index`.
+2. In the same two folders, delete `9876.blob` (or `9877.blob`) and `index.mmvp.json`.
+
+## Development
+
+A standard Tauri 2 project:
 
 ```
-src/                  GUI 前端（純 HTML/JS）
-src-tauri/            Rust workspace root 與 mmvp app（lib.rs：Tauri 指令，patcher/：套用邏輯，net.rs：HTTP）
-src-tauri/shared/     mmvp-shared：blob／index、UnityFS、SerializedFile、AudioClip、語音站台格式
-src-tauri/dumper/     mmvp-dumper：從日版 dump 語音站台的額外工具
-scripts/              publish-voices.mjs：dump 並在有變動時部署
-docs/                 技術筆記
+src/                  GUI front end (plain HTML/JS)
+src-tauri/            Rust workspace root and the mmvp app (lib.rs: Tauri commands, patcher/: apply logic, net.rs: HTTP)
+src-tauri/shared/     mmvp-shared: blob / index, UnityFS, SerializedFile, AudioClip, voice site format
+src-tauri/dumper/     mmvp-dumper: extra tool that dumps the voice site from the Japanese client
+scripts/              publish-voices.mjs: dump, then deploy when something changed
+docs/                 technical notes
 ```
 
 ```sh
 npm ci
-npm run dev                  # 開發模式啟動 GUI
-npm test                     # cargo test；設 MMVP_TEST_ROOT / MMVP_TEST_SOURCE 可跑端到端測試
-npm run dump -- <jp_root>    # 只 dump 語音站台到 work/pages/<日期>
-npm run publish:voices       # dump → 和線上比對 → 有變動才部署（讀 deploy.local.json，可加 -- --dry-run／--force）
-git tag v0.2.0 && git push origin v0.2.0   # 發佈程式：版本寫在 src-tauri/Cargo.toml，由 GitHub Actions 建置
+npm run dev                  # start the GUI in development mode
+npm test                     # cargo test; set MMVP_TEST_ROOT / MMVP_TEST_SOURCE to run the end-to-end test
+npm run dump -- <jp_root>    # only dump the voice site into work/pages/<date>
+npm run publish:voices       # dump -> compare with the live site -> deploy if changed (reads deploy.local.json; -- --dry-run / --force)
+git tag v0.2.0 && git push origin v0.2.0   # release: the version is in src-tauri/Cargo.toml, GitHub Actions builds it
 ```
 
-技術細節見 [docs/research.md](docs/research.md)。
+Technical details are in [docs/research.md](docs/research.md) (Traditional Chinese).
 
-## 注意
+## Disclaimer
 
-非官方工具，與 NEXON、devCAT 無關。使用風險自負。
+Unofficial tool, not affiliated with NEXON or devCAT. Use at your own risk.
