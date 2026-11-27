@@ -1,11 +1,11 @@
 .venv/
 __pycache__/
-# 遊戲資源抽出物與中間檔，不進版控
+target/
+node_modules/
+# JP dumps and scratch: never committed
 work/
-out/
 # Cloudflare: settings and tokens stay local
 deploy.local.json
 .wrangler/
 .dev.vars
 *.key
-

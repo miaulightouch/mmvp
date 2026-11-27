@@ -1,18 +1,15 @@
-# Build the patcher and publish it as a GitHub Release with Tauri updater artifacts.
-# Trigger: push a tag vX.Y.Z that matches [workspace.package] version in installer/Cargo.toml.
+# Build mmvp and publish a GitHub Release with Tauri updater artifacts.
+# Trigger: push a tag vX.Y.Z equal to [workspace.package] version in Cargo.toml.
 #
 # Repository settings (Settings > Secrets and variables > Actions):
-#   secrets.TAURI_SIGNING_PRIVATE_KEY           content of the private key from `npx tauri signer generate`
-#   secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password
-#   vars.TAURI_UPDATER_PUBKEY                   content of the .pub file (public, safe to show)
-#   vars.MMVOICE_SOURCE                         voice site URL, e.g. https://<project>.pages.dev
-# Nothing Cloudflare-related is needed here: the voice site is deployed from your own machine.
+#   secrets.TAURI_SIGNING_PRIVATE_KEY, secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD   updater signing key
+#   vars.TAURI_UPDATER_PUBKEY                                                       its public key
+#   vars.MMVP_SOURCE                                                                voice site URL
 name: release
 
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -24,71 +21,60 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Check tag matches version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Check tag and configuration
         run: |
-          $v = (Select-String -Path installer/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          if ("v$v" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != installer/Cargo.toml version $v" }
-
-      - name: Check configuration
-        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != Cargo.toml version $v" }
           if (-not "${{ vars.TAURI_UPDATER_PUBKEY }}") { throw "set repository variable TAURI_UPDATER_PUBKEY" }
-          if (-not "${{ vars.MMVOICE_SOURCE }}") { throw "set repository variable MMVOICE_SOURCE" }
+          if (-not "${{ vars.MMVP_SOURCE }}") { throw "set repository variable MMVP_SOURCE" }
+          @{ plugins = @{ updater = @{
+            pubkey = "${{ vars.TAURI_UPDATER_PUBKEY }}"
+            endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
+          } } } | ConvertTo-Json -Depth 5 | Set-Content "$env:RUNNER_TEMP/updater.json"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: installer/app/package-lock.json
+          cache-dependency-path: app/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: installer
 
-      - name: Install Tauri CLI
-        working-directory: installer/app
-        run: npm ci
+      - run: npm ci
+        working-directory: app
 
-      - name: Updater config (public key + endpoint of this repository)
-        run: |
-          $cfg = @{ plugins = @{ updater = @{
-            pubkey = "${{ vars.TAURI_UPDATER_PUBKEY }}"
-            endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
-          } } }
-          $cfg | ConvertTo-Json -Depth 5 | Set-Content "$env:RUNNER_TEMP/updater.json"
+      - run: cargo test -p mmvp-core --release
 
-      - name: Build and publish
+      - name: Build and publish the installer
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          MMVOICE_SOURCE: ${{ vars.MMVOICE_SOURCE }}
-          MMVOICE_REPO: ${{ github.repository }}
+          MMVP_SOURCE: ${{ vars.MMVP_SOURCE }}
+          MMVP_REPO: ${{ github.repository }}
         with:
-          projectPath: installer/app
+          projectPath: app
           tauriScript: npx tauri
           args: --config ${{ runner.temp }}/updater.json
           tagName: ${{ github.ref_name }}
-          releaseName: "瑪奇 Mobile 日文語音 ${{ github.ref_name }}"
-          releaseBody: "`*-portable.exe`：免安裝，直接執行。`*-setup.exe`：安裝版（不需要系統管理員權限）。兩者都會自動提示更新。"
-          releaseDraft: false
-          prerelease: false
+          releaseName: "mmvp ${{ github.ref_name }}"
+          releaseBody: "`mmvp-portable.exe`：免安裝，直接執行。`*-setup.exe`：安裝版（不需要系統管理員權限）。兩者都會自動提示更新。"
           updaterJsonPreferNsis: true
 
-      - name: Attach portable exe (same binary, signed for self-update)
+      - name: Attach the portable exe (same binary, signed for self-update)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        working-directory: installer/app
+        working-directory: app
         run: |
-          $p = "$env:RUNNER_TEMP/mmvoice-portable.exe"
-          Copy-Item ../target/release/mmvoice.exe $p
+          $p = "$env:RUNNER_TEMP/mmvp-portable.exe"
+          Copy-Item ../target/release/mmvp.exe $p
           npx tauri signer sign $p
-          if (-not (Test-Path "$p.sig")) { throw "signing failed" }
-          gh release upload "${{ github.ref_name }}" $p "$p.sig" --clobber
+          # v0.1.x portable copies update from the old asset name
+          Copy-Item $p "$env:RUNNER_TEMP/mmvoice-portable.exe"; Copy-Item "$p.sig" "$env:RUNNER_TEMP/mmvoice-portable.exe.sig"
+          gh release upload "${{ github.ref_name }}" $p "$p.sig" "$env:RUNNER_TEMP/mmvoice-portable.exe" "$env:RUNNER_TEMP/mmvoice-portable.exe.sig" --clobber
