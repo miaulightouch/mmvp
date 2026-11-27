@@ -68,6 +68,13 @@ fn our_blobs(dir: &Path) -> Vec<(u16, PathBuf)> {
     fs::read_dir(dir).map(|rd| rd.filter_map(|e| e.ok()).filter_map(|e| blob_number(&e.path()).filter(|&n| n >= REDIRECT_BASE).map(|n| (n, e.path()))).collect()).unwrap_or_default()
 }
 
+/// [base package, Starter sub-package] of the family `pkg` belongs to (bit 15 of an index location).
+fn family(pkg: &str) -> [Option<&'static str>; 2] {
+    let base = pkg.strip_suffix("/Starter").unwrap_or(pkg);
+    let find = |p: String| PACKAGES.iter().copied().find(|x| *x == p);
+    [find(base.to_string()), find(format!("{base}/Starter"))]
+}
+
 fn rel_pkg(rel: &str) -> &str {
     rel.rsplit_once('/').map(|x| x.0).unwrap_or("")
 }
@@ -176,8 +183,7 @@ pub fn status(root: &Path) -> Result<Vec<PkgStatus>> {
         let (state, n) = if index::is_patched(&live)? {
             let used = index::redirect_blobs(&live)?;
             let blob = used.iter().copied().max().unwrap_or(0);
-            let n = live[8..].chunks_exact(4).take(u32::from_le_bytes(live[4..8].try_into().unwrap()) as usize)
-                .filter(|c| u16::from_le_bytes([c[0], c[1]]) & index::MASK >= REDIRECT_BASE).count();
+            let n = index::redirected_entries(&live)?;
             let m = marker.filter(|m| m.index_sha1 == audio::sha1_hex(&live));
             let stale = m.as_ref().map(|m| {
                 m.sources.iter().filter(|(rel, &(size, mtime))| stat(&root.join(rel)).ok() != Some((size, mtime))).map(|(r, _)| r.clone()).collect()
@@ -435,11 +441,22 @@ pub fn patch(o: &Options, report: Report) -> Result<PatchSummary> {
     }
     clean_tmp(o.root);
 
-    // packages to rewrite: those with work, plus patched ones that now need nothing (restore them)
-    let todo_pkgs: Vec<String> = indexes.values().filter(|i| plan.pkgs.contains_key(&i.pkg) || i.live_patched).map(|i| i.pkg.clone()).collect();
+    // Packages to rewrite: every package of a family (base + Starter) that has work, because the
+    // dependency tables reference bundles across the family; plus patched ones that now need nothing.
+    let family_has_work = |pkg: &str| family(pkg).iter().flatten().any(|p| plan.pkgs.contains_key(*p));
+    let mut todo_pkgs: Vec<String> = indexes.values().filter(|i| family_has_work(&i.pkg) || i.live_patched).map(|i| i.pkg.clone()).collect();
+    todo_pkgs.sort();
+    // one blob number per family; the live indexes may point at N (then write N+1) or N+1
     let mut numbers = HashMap::new();
     for pkg in &todo_pkgs {
-        let used = if indexes[pkg].live_patched { index::redirect_blobs(&indexes[pkg].live)? } else { HashSet::new() };
+        let mut used = HashSet::new();
+        for p in family(pkg).iter().flatten() {
+            if let Some(ix) = indexes.get(*p) {
+                if ix.live_patched {
+                    used.extend(index::redirect_blobs(&ix.live)?);
+                }
+            }
+        }
         numbers.insert(pkg.clone(), if used.contains(&o.blob_no) { o.blob_no + 1 } else { o.blob_no });
     }
 
@@ -514,57 +531,66 @@ pub fn patch(o: &Options, report: Report) -> Result<PatchSummary> {
         return Err(e);
     }
 
-    // 4. commit, package by package: index.bak (originals only) -> new blob in place -> index -> old blobs
+    // 4. commit: index.bak (originals only) -> all new blobs into place -> all indexes -> old blobs.
+    //    Indexes of one family point into each other's blobs, so every new blob exists before any
+    //    index refers to it, and old blobs go only after every index stopped referring to them.
     report(Event::Stage("commit"));
+    let empty = HashMap::new();
+    let mut new_indexes = Vec::new();
+    for pkg in &todo_pkgs {
+        let [base, starter] = family(pkg);
+        let fam: index::FamilyRedirect = [
+            base.and_then(|p| redirect.get(p)).unwrap_or(&empty),
+            starter.and_then(|p| redirect.get(p)).unwrap_or(&empty),
+        ];
+        let (new_idx, main, deps) = index::patch(&indexes[pkg].orig, fam).with_context(|| format!("{pkg}/index"))?;
+        new_indexes.push((pkg.clone(), new_idx, main, deps));
+    }
     for pkg in &todo_pkgs {
         let ix = &indexes[pkg];
-        let dir = pkg_dir(o.root, pkg);
         if !ix.live_patched {
-            write_atomic(&dir.join("index.bak"), &ix.live)?;
+            write_atomic(&pkg_dir(o.root, pkg).join("index.bak"), &ix.live)?;
         }
-        let empty = HashMap::new();
-        let red = redirect.get(pkg).unwrap_or(&empty);
-        let (new_idx, changed) = index::patch(&ix.orig, red)?;
-        let mut keep = None;
-        if let Some(w) = writers.get(pkg) {
-            fs::rename(&w.tmp, &w.path).with_context(|| format!("rename {}", w.path.display()))?;
-            keep = Some(w.path.clone());
-        }
-        write_atomic(&dir.join("index"), &new_idx)?;
-        let name = keep.as_ref().map(|p| p.file_name().unwrap().to_string_lossy().into_owned());
-        match &name {
-            Some(blob) => {
-                let mut sources = BTreeMap::new();
-                for it in plan.pkgs.get(pkg).into_iter().flatten() {
-                    if !sources.contains_key(&it.rel) {
-                        sources.insert(it.rel.clone(), stat(&o.root.join(&it.rel))?);
-                    }
+    }
+    for w in writers.values() {
+        fs::rename(&w.tmp, &w.path).with_context(|| format!("rename {}", w.path.display()))?;
+    }
+    for (pkg, new_idx, main, deps) in &new_indexes {
+        let dir = pkg_dir(o.root, pkg);
+        write_atomic(&dir.join("index"), new_idx)?;
+        let name = writers.get(pkg).map(|w| w.path.file_name().unwrap().to_string_lossy().into_owned());
+        if index::is_patched(new_idx)? {
+            let mut sources = BTreeMap::new();
+            for it in plan.pkgs.get(pkg).into_iter().flatten() {
+                if !sources.contains_key(&it.rel) {
+                    sources.insert(it.rel.clone(), stat(&o.root.join(&it.rel))?);
                 }
-                let m = Marker {
-                    version: 1,
-                    pack_id: o.voices.id.clone(),
-                    pack_created: o.voices.latest.date.clone(),
-                    app_version: env!("CARGO_PKG_VERSION").into(),
-                    orig_index_sha1: audio::sha1_hex(&ix.orig),
-                    index_sha1: audio::sha1_hex(&new_idx),
-                    blob: blob.clone(),
-                    sources,
-                };
-                write_atomic(&dir.join(MARKER), &serde_json::to_vec_pretty(&m)?)?;
             }
-            None => {
-                let _ = fs::remove_file(dir.join(MARKER));
-            }
+            let m = Marker {
+                version: 1,
+                pack_id: o.voices.id.clone(),
+                pack_created: o.voices.latest.date.clone(),
+                app_version: env!("CARGO_PKG_VERSION").into(),
+                orig_index_sha1: audio::sha1_hex(&indexes[pkg].orig),
+                index_sha1: audio::sha1_hex(new_idx),
+                blob: name.clone().unwrap_or_default(),
+                sources,
+            };
+            write_atomic(&dir.join(MARKER), &serde_json::to_vec_pretty(&m)?)?;
+        } else {
+            let _ = fs::remove_file(dir.join(MARKER));
         }
-        for (_, p) in our_blobs(&dir) {
+        report(Event::Info(format!("{pkg}: {}，index 重導向 {main} 條、相依 {deps} 條", name.clone().unwrap_or_else(|| "沒有自己的 blob".into()))));
+        summary.per_pkg.push((pkg.clone(), name, *main));
+    }
+    for pkg in &todo_pkgs {
+        let keep = writers.get(pkg).map(|w| w.path.clone());
+        for (_, p) in our_blobs(&pkg_dir(o.root, pkg)) {
             if Some(&p) != keep.as_ref() {
                 fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             }
         }
-        report(Event::Info(format!("{pkg}: {}，{changed} 條 index 重導向", name.clone().unwrap_or_else(|| "還原為原始 index".into()))));
-        summary.per_pkg.push((pkg.clone(), name, changed));
-    }
-    o.voices.prune_cache();
+    }    o.voices.prune_cache();
     report(Event::Info(format!("完成，耗時 {:.1} 秒", t0.elapsed().as_secs_f64())));
     Ok(summary)
 }
