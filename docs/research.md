@@ -38,20 +38,20 @@ PlatformResourcePackages/
 
 - [確認] 少數區段不是 UnityFS（開頭 `1F 8B 11 E5 …`，像被改過的 gzip），體積很小，目前看不是音訊。尚未解。
 
-### `index`（部分解析）
+### `index`（[確認] 2026-11-27 全部解開）
 
 ```
 0x00  u32  magic = BA C3 A9 E6
 0x04  u32  N     (TW AssetPackages: 238302)
-0x08  (u16 blob_no, u16 bundle_no)[N]
-之後  壓縮過的路徑字串表（類 LZ，可見片段如 "_Facial", "PickUp", 結尾是副檔名表 .wav/.png/.prefab…）
+0x08  (u16 blob, u16 slot)[N]                       資產條目 → bundle 位置
+      u32  M     (97862)
+      M × { (u16 blob, u16 slot) key, u32 C, (u16 blob, u16 slot)[C] }   bundle → 它相依的 bundle 位置
+      u32  N, 16-byte[N], u32[] …                   每條目的其他資料（不含位置，保持原樣）
 ```
 
-- [確認] `blob_no` 最大值 765 與 blob 數量吻合。
-- [確認] `AssetPackages/Starter` 與 `ResourcesPackage/Starter` 的 index **每一條** blob 欄位都帶 `0x8000` 旗標（`0x8000 | NNNN`），其他 package 都沒有。[推論] 意義未知（可能表示位於 Starter）。patch 比對時遮掉這個 bit，改寫時保留。
-- [確認] index 沒有指到所有 slot：TW `AssetPackages` 178444 個 slot 中有 14633 個沒有任何條目指向（其中 160 個含音訊，裡面的語音路徑都另有被引用的副本）。[推論] 是增量更新留下的舊副本，遊戲讀不到，patch 會跳過。
-- [推論] 這是「資產路徑 → (blob, bundle)」的查找表；替換語音時若 bundle 大小或位置改變，可能需要同步改它。字串表的壓縮格式尚未解。
-
+- `blob` 欄位的 bit 15 是 **package 選擇**：0 = 本家族的主 package（AssetPackages），1 = Starter 子 package。`*/Starter` 主表每條都帶這個 bit，相依表會跨 package 混用（例如 AssetPackages 的 cutscene 依賴 Starter 的 shader）。
+- [確認] **遊戲用「載入位置」去查相依表**。只改主表時，cutscene 從 9876 載入，查不到相依 → shader／material bundle 沒載入 → 畫面紫紅色，但語音正常（語音不需要相依）。現在主表與相依表裡所有指向被重導 bundle 的位置都一起改寫（同家族兩個 index 互相參照，所以提交順序是：先放好所有新 blob → 再寫所有 index → 最後刪舊 blob）。
+- [確認] 主表沒引用的 slot 也不在相依表裡，是死資料。
 ## 語音資源
 
 - [確認] 沒有 CRI ADX2 / Wwise / FMOD bank；音訊是 **Unity 原生 AudioClip**，存在 bundle 的 `.resS` 裡。
