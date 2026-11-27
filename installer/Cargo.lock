@@ -2090,7 +2090,7 @@ dependencies = [
 
 [[package]]
 name = "mmv-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "mmv-core",
@@ -2098,7 +2098,7 @@ dependencies = [
 
 [[package]]
 name = "mmv-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "lz4_flex",
@@ -2111,7 +2111,7 @@ dependencies = [
 
 [[package]]
 name = "mmvoice-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
