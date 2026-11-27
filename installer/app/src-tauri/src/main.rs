@@ -60,7 +60,8 @@ fn detect_root_nexon() -> Option<PathBuf> {
     let v: serde_json::Value = serde_json::from_slice(&fs::read(db).ok()?).ok()?;
     let apps = v.get("installedApps")?.as_object()?;
     let mut candidates: Vec<&serde_json::Value> = apps.get("59826").into_iter().collect();
-    candidates.extend(apps.values().filter(|a| a.get("name").and_then(|n| n.as_str()).map_or(false, |n| n.starts_with("MabinogiMobile"))));
+    // only TW: the JP client is product 2943 (obd-manifest-2943) and must never be picked
+    candidates.extend(apps.values().filter(|a| a.get("name").and_then(|n| n.as_str()) == Some("MabinogiMobile_TW")));
     candidates.into_iter().filter_map(|a| a.get("installPath")?.as_str().and_then(|p| normalize_root(Path::new(p)))).next()
 }
 
