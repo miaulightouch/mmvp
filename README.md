@@ -8,7 +8,9 @@ Mabinogi Mobile Voice Pack (for TW)：把台版《瑪奇 Mobile》的韓語配�
 
 ## 安裝
 
-1. 從 [Releases](https://github.com/miaulightouch/mmvp/releases/latest) 下載 `*-setup.exe` 並安裝（不需要系統管理員權限）。
+1. 從 [Releases](https://github.com/miaulightouch/mmvp/releases/latest) 下載其中一個：
+   - `*-setup.exe`：安裝版（不需要系統管理員權限）
+   - `mmvoice-portable.exe`：免安裝，放在可寫入的資料夾直接執行
 2. 關閉遊戲，開啟 **MabiMobile JP Voice**，確認遊戲目錄後按「套用日文語音」。
 3. 要恢復原版，按「還原原版語音」。
 
