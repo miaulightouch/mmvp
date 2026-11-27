@@ -74,11 +74,12 @@ _headers, index.html
 
 - 掃描：Rust 與 UnityPy 對 TW 的 2084 個音訊 bundle／15179 段 clip 結果完全一致。
 - 重建：255 個 bundle 與 UnityPy 版逐物件相同（音訊以外 bytes 相同）；v0.2.0 重構後的輸出與 v0.1.3（實機確認無紫畫面）比對，兩張表的每個位置都指向 byte 相同的 bundle。
-- 實機（2026-11-27）：NPC 與 cutscene 語音為 JP、cutscene 畫面正常；自我更新（安裝版與 portable）以測試金鑰端到端驗證。
+- 實機（2026-11-27）：NPC 與 cutscene 語音為 JP、cutscene 畫面正常。
+- 自我更新（v0.2.0 起只有免安裝的 `mmvp.exe`）：Release 附 `mmvp.exe`、`mmvp.exe.sig`（Tauri／minisign 簽章）、`latest.json`（`{"version"}`）；程式比較版本後下載、用內建公鑰驗章、把執行中的 exe 改名為 `.old` 再換上新檔並重啟。[確認] 以測試金鑰端到端驗證：0.2.0 → 0.2.1 成功，竄改過的檔案被拒絕且原檔不變。
 - 未知：BlackCipher 或 launcher 修復是否會檢查 blob 以外的檔案（launcher 的 obd-manifest 記錄每個原始檔的分塊 SHA1；mmvp 不改原始檔）。
 
 ## 建置
 
 - 本機：scoop 的 rustup（`stable-x86_64-pc-windows-gnu`）＋ `mingw`（dlltool）。GNU 版的 exe 需要旁邊有 `WebView2Loader.dll`；release 由 GitHub Actions 以 MSVC 建置，是單一 exe。
 - Node.js：根目錄 `package.json` 提供 Tauri CLI、wrangler 與常用指令（`npm run dev / test / dump / publish:voices`）。
-- 發版設定（GitHub Actions）：secrets `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；variables `TAURI_UPDATER_PUBKEY`、`MMVP_SOURCE`。
+- 發版設定（GitHub Actions）：secrets `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；variables `TAURI_UPDATER_PUBKEY`（編進 exe 作為 `MMVP_UPDATER_PUBKEY`）、`MMVP_SOURCE`。

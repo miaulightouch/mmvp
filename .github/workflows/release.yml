@@ -1,8 +1,9 @@
-# Build the patcher and publish a GitHub Release with Tauri updater artifacts.
+# Build mmvp.exe and publish it as a GitHub Release (portable only).
 # Trigger: push a tag vX.Y.Z equal to [workspace.package] version in src-tauri/Cargo.toml.
 #
+# Release assets: mmvp.exe, mmvp.exe.sig (checked by the app's self-update), latest.json {"version"}.
 # Repository settings (Settings > Secrets and variables > Actions):
-#   secrets.TAURI_SIGNING_PRIVATE_KEY, secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD   updater signing key
+#   secrets.TAURI_SIGNING_PRIVATE_KEY, secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD   signing key
 #   vars.TAURI_UPDATER_PUBKEY                                                       its public key
 #   vars.MMVP_SOURCE                                                                voice site URL
 name: release
@@ -20,6 +21,10 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      MMVP_SOURCE: ${{ vars.MMVP_SOURCE }}
+      MMVP_REPO: ${{ github.repository }}
+      MMVP_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
     steps:
       - uses: actions/checkout@v5
 
@@ -27,12 +32,9 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != src-tauri/Cargo.toml version $version"; exit 1; }
-          [ -n "${{ vars.TAURI_UPDATER_PUBKEY }}" ] || { echo "set repository variable TAURI_UPDATER_PUBKEY"; exit 1; }
-          [ -n "${{ vars.MMVP_SOURCE }}" ] || { echo "set repository variable MMVP_SOURCE"; exit 1; }
-          cat > "$RUNNER_TEMP/updater.json" <<EOF
-          {"plugins": {"updater": {"pubkey": "${{ vars.TAURI_UPDATER_PUBKEY }}",
-            "endpoints": ["https://github.com/${{ github.repository }}/releases/latest/download/latest.json"]}}}
-          EOF
+          [ -n "$MMVP_UPDATER_PUBKEY" ] || { echo "set repository variable TAURI_UPDATER_PUBKEY"; exit 1; }
+          [ -n "$MMVP_SOURCE" ] || { echo "set repository variable MMVP_SOURCE"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v5
         with:
@@ -46,32 +48,18 @@ jobs:
 
       - run: npm ci
       - run: npm test
+      - run: npm run build -- --no-bundle
 
-      - name: Build and publish the installer
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          MMVP_SOURCE: ${{ vars.MMVP_SOURCE }}
-          MMVP_REPO: ${{ github.repository }}
-        with:
-          tauriScript: npx tauri
-          args: --config ${{ runner.temp }}/updater.json
-          tagName: ${{ github.ref_name }}
-          releaseName: "mmvp ${{ github.ref_name }}"
-          releaseBody: "`mmvp-portable.exe`：免安裝，直接執行。`*-setup.exe`：安裝版（不需要系統管理員權限）。兩者都會自動提示更新。"
-          updaterJsonPreferNsis: true
-
-      - name: Attach the portable exe (same binary, signed for self-update)
+      - name: Sign and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          p="$RUNNER_TEMP/mmvp-portable.exe"
-          cp src-tauri/target/release/mmvp.exe "$p"
-          npx tauri signer sign "$p"
-          # v0.1.x portable copies update from the old asset name
-          cp "$p" "$RUNNER_TEMP/mmvoice-portable.exe"; cp "$p.sig" "$RUNNER_TEMP/mmvoice-portable.exe.sig"
-          gh release upload "$GITHUB_REF_NAME" "$p" "$p.sig" "$RUNNER_TEMP/mmvoice-portable.exe" "$RUNNER_TEMP/mmvoice-portable.exe.sig" --clobber
+          mkdir dist
+          cp src-tauri/target/release/mmvp.exe dist/
+          npx tauri signer sign dist/mmvp.exe
+          echo "{\"version\": \"$VERSION\"}" > dist/latest.json
+          gh release create "$GITHUB_REF_NAME" dist/mmvp.exe dist/mmvp.exe.sig dist/latest.json \
+            --title "mmvp $GITHUB_REF_NAME" \
+            --notes "下載 \`mmvp.exe\`，放在可寫入的資料夾直接執行（免安裝）。程式會自動提示更新。"

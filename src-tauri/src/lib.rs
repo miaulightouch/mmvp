@@ -135,15 +135,18 @@ async fn restore(app: AppHandle) -> Res<()> {
 }
 
 #[tauri::command]
-async fn app_update(app: AppHandle) -> Res<Option<String>> {
-    update::check(&app).await.map_err(err)
+async fn app_update() -> Res<Option<String>> {
+    tauri::async_runtime::spawn_blocking(|| update::check().map_err(err)).await.map_err(err)?
 }
 
 #[tauri::command]
-async fn install_update(app: AppHandle) -> Res<()> {
-    let _g = busy(&app)?;
-    let a = app.clone();
-    update::install(&app, move |d, t| emit(&a, "app", d, t)).await.map_err(err)
+async fn install_update(app: AppHandle, version: String) -> Res<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _g = busy(&app)?;
+        update::install(&version, &|d, t| emit(&app, "app", d, t)).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -151,7 +154,6 @@ pub fn run() {
     update::cleanup_old();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Busy(AtomicBool::new(false)))
         .invoke_handler(tauri::generate_handler![state, pick_root, voices, apply, restore, app_update, install_update])
         .run(tauri::generate_context!())

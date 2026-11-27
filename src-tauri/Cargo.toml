@@ -24,7 +24,6 @@ base64 = "0.22"
 minisign-verify = "0.2"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
 
 [workspace]
 resolver = "2"

@@ -101,7 +101,7 @@ function restore() {
   task(async () => { await invoke("restore"); log("已還原為原版（韓語）語音", "ok"); });
 }
 
-const installUpdate = () => task(() => invoke("install_update"));
+const installUpdate = () => task(() => invoke("install_update", { version: update }));
 
 listen("progress", ({ payload: p }) => {
   $("step").textContent = STEPS[p.step] || p.step;

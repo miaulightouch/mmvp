@@ -8,12 +8,9 @@ Mabinogi Mobile Voice Pack (for TW)：把台版《瑪奇 Mobile》的韓語配�
 
 ## 安裝
 
-1. 從 [Releases](https://github.com/miaulightouch/mmvp/releases/latest) 下載其中一個：
-   - `mmvp-portable.exe`：免安裝，放在可寫入的資料夾直接執行
-   - `*-setup.exe`：安裝版（不需要系統管理員權限）
-2. 關閉遊戲，開啟 mmvp，確認遊戲目錄後按「套用日文語音」。
+1. 從 [Releases](https://github.com/miaulightouch/mmvp/releases/latest) 下載 `mmvp.exe`，放在可寫入的資料夾直接執行（免安裝）。
+2. 關閉遊戲，確認遊戲目錄後按「套用日文語音」。
 3. 要恢復原版，按「還原原版語音」。
-
 ## 運作方式
 
 遊戲資源是一組 `NNNN.blob`（內含 Unity asset bundle）加上 `index`（資產與相依 bundle 的位置表）。
