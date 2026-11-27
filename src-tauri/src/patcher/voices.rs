@@ -30,7 +30,7 @@ impl Source {
         // the version first: other fields may differ between formats
         let raw: serde_json::Value = serde_json::from_slice(&self.get(LATEST)?).context(LATEST)?;
         if raw.get("version").and_then(|v| v.as_u64()) != Some(VERSION.into()) {
-            bail!("語音來源格式不符（{}），請更新程式", raw.get("version").unwrap_or(&serde_json::Value::Null));
+            bail!(tr!("Voice source format {} is not supported; update the program", "語音來源格式不符（{}），請更新程式", raw.get("version").unwrap_or(&serde_json::Value::Null)));
         }
         serde_json::from_value(raw).context(LATEST)
     }
@@ -49,7 +49,7 @@ impl Voices {
         let latest = source.latest()?;
         let raw = source.get(MANIFEST)?;
         if sha1_hex(&raw) != latest.manifest_sha1 {
-            bail!("manifest.json 與 latest.json 不符（語音正在更新？請稍後再試）");
+            bail!(tr!("manifest.json does not match latest.json (voices being updated? try again later)", "manifest.json 與 latest.json 不符（語音正在更新？請稍後再試）"));
         }
         let manifest: Manifest = serde_json::from_slice(&raw).context(MANIFEST)?;
         Ok(Voices { source, latest, manifest, cache: cache.join("clips") })
@@ -78,7 +78,7 @@ impl Voices {
             missing.par_iter().try_for_each(|h| -> Result<()> {
                 let data = self.source.get(&format!("clips/{h}"))?;
                 if sha1_hex(&data) != **h {
-                    bail!("語音 {h} 下載不完整");
+                    bail!(tr!("voice {h}: incomplete download", "語音 {h} 下載不完整"));
                 }
                 let tmp = self.path(h).with_extension("part");
                 fs::write(&tmp, &data)?;
@@ -90,10 +90,10 @@ impl Voices {
     }
 
     pub fn clip(&self, sha1: &str) -> Result<Vec<u8>> {
-        let data = fs::read(self.path(sha1)).with_context(|| format!("語音 {sha1} 不在快取"))?;
+        let data = fs::read(self.path(sha1)).with_context(|| tr!("voice {sha1} is not in the cache", "語音 {sha1} 不在快取"))?;
         if sha1_hex(&data) != sha1 {
             let _ = fs::remove_file(self.path(sha1));
-            bail!("快取的語音 {sha1} 損壞，請重新套用");
+            bail!(tr!("cached voice {sha1} is damaged; apply again", "快取的語音 {sha1} 損壞，請重新套用"));
         }
         Ok(data)
     }

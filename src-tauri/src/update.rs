@@ -18,7 +18,7 @@ fn url(file: &str) -> Result<String> {
     if let Ok(base) = std::env::var("MMVP_UPDATE_BASE") {
         return Ok(format!("{}/{file}", base.trim_end_matches('/')));
     }
-    let repo = option_env!("MMVP_REPO").ok_or_else(|| anyhow!("這個版本沒有設定更新來源"))?;
+    let repo = option_env!("MMVP_REPO").ok_or_else(|| anyhow!(tr!("No update source is configured in this build", "這個版本沒有設定更新來源")))?;
     Ok(format!("https://github.com/{repo}/releases/latest/download/{file}"))
 }
 
@@ -30,7 +30,7 @@ fn version_key(v: &str) -> Vec<u64> {
 /// Version of the latest release, if newer than this build.
 pub fn check() -> Result<Option<String>> {
     let v: serde_json::Value = serde_json::from_slice(&net::get(&url("latest.json")?, &|_, _| {})?)?;
-    let version = v.get("version").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("latest.json 格式錯誤"))?;
+    let version = v.get("version").and_then(|v| v.as_str()).ok_or_else(|| anyhow!(tr!("latest.json is malformed", "latest.json 格式錯誤")))?;
     Ok((version_key(version) > version_key(env!("CARGO_PKG_VERSION"))).then(|| version.to_string()))
 }
 
@@ -43,10 +43,10 @@ pub fn install(progress: &dyn Fn(u64, u64)) -> Result<()> {
     let (tmp, old) = (exe.with_extension("exe.new"), exe.with_extension("exe.old"));
     fs::write(&tmp, &new)?;
     let _ = fs::remove_file(&old);
-    fs::rename(&exe, &old).map_err(|e| anyhow!("無法替換程式（資料夾不可寫入？）：{e}"))?;
+    fs::rename(&exe, &old).map_err(|e| anyhow!(tr!("Cannot replace the program (folder not writable?): {e}", "無法替換程式（資料夾不可寫入？）：{e}")))?;
     if let Err(e) = fs::rename(&tmp, &exe) {
         let _ = fs::rename(&old, &exe);
-        bail!("無法替換程式：{e}");
+        bail!(tr!("Cannot replace the program: {e}", "無法替換程式：{e}"));
     }
     std::process::Command::new(&exe).spawn()?;
     std::process::exit(0);
@@ -63,8 +63,8 @@ pub fn cleanup_old() {
 /// Tauri signature: base64 of a minisign signature, checked with the built-in public key.
 fn verify(data: &[u8], sig: &[u8]) -> Result<()> {
     let b64 = |s: &str| -> Result<String> { Ok(String::from_utf8(base64::engine::general_purpose::STANDARD.decode(s.trim())?)?) };
-    let key = option_env!("MMVP_UPDATER_PUBKEY").filter(|k| !k.is_empty()).ok_or_else(|| anyhow!("這個版本沒有設定更新公鑰"))?;
-    let pk = minisign_verify::PublicKey::decode(&b64(key)?).map_err(|e| anyhow!("公鑰格式錯誤：{e}"))?;
-    let sig = minisign_verify::Signature::decode(&b64(&String::from_utf8_lossy(sig))?).map_err(|e| anyhow!("簽章格式錯誤：{e}"))?;
-    pk.verify(data, &sig, true).map_err(|e| anyhow!("簽章驗證失敗：{e}"))
+    let key = option_env!("MMVP_UPDATER_PUBKEY").filter(|k| !k.is_empty()).ok_or_else(|| anyhow!(tr!("No update key is configured in this build", "這個版本沒有設定更新公鑰")))?;
+    let pk = minisign_verify::PublicKey::decode(&b64(key)?).map_err(|e| anyhow!(tr!("Bad public key: {e}", "公鑰格式錯誤：{e}")))?;
+    let sig = minisign_verify::Signature::decode(&b64(&String::from_utf8_lossy(sig))?).map_err(|e| anyhow!(tr!("Bad signature: {e}", "簽章格式錯誤：{e}")))?;
+    pk.verify(data, &sig, true).map_err(|e| anyhow!(tr!("Signature check failed: {e}", "簽章驗證失敗：{e}")))
 }

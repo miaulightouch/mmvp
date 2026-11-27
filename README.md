@@ -8,17 +8,17 @@ Mabinogi Mobile Voice Pack (for TW): replaces the Korean voice-over of the Taiwa
 - The first download is about 100 MB; after that only changed voices are downloaded.
 - You are prompted to re-apply after a game update or a voice update. The program updates itself.
 
-The interface is in Traditional Chinese.
+The interface is in English or Traditional Chinese, following the system language.
 
 ## Install
 
 1. Download `mmvp.exe` from [Releases](https://github.com/miaulightouch/mmvp/releases/latest), put it in a writable folder and run it (no installer).
-2. Close the game, check the game folder, then press 「套用日文語音」 (apply Japanese voices).
-3. To go back to the original voices, press 「還原原版語音」 (restore original voices).
+2. Close the game, check the game folder, then press **Apply JP voices**.
+3. To go back to the original voices, press **Restore original voices**.
 
 ### Clients of other regions (experimental)
 
-mmvp finds the Taiwanese client installed by the Nexon Launcher on its own. A client of another region can be tried as well, as long as it has the same file layout (`AssetPackages\index` inside the game folder): press 「變更…」 (change) and pick its game folder. The interface then marks it 「實驗性」 (experimental).
+mmvp finds the Taiwanese client installed by the Nexon Launcher on its own. A client of another region can be tried as well, as long as it has the same file layout (`AssetPackages\index` inside the game folder): press **Change…** and pick its game folder. The interface then marks it **Experimental**.
 Only the Taiwanese client has been verified in game. Whether other clients work is unknown.
 
 ## How it works

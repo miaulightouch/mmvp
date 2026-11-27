@@ -1,9 +1,7 @@
+// Texts: T and LANG from i18n.js.
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const $ = (id) => document.getElementById(id);
-
-const STEPS = { scan: "掃描遊戲檔案", download: "下載日文語音", rebuild: "重新打包", commit: "寫入", app: "下載新版程式" };
-const STATES = { original: "原版語音", patched: "日文語音已套用", reverted: "遊戲更新後已還原為原版語音", missing: "遊戲正在更新" };
 
 let view = null;      // local state from the backend
 let voices = null;    // latest voice version on the site
@@ -41,26 +39,27 @@ function render() {
   $("ver").textContent = "v" + view.version;
   $("root").textContent = view.root || "—";
   $("experimental").hidden = !view.experimental;
-  $("voices").textContent = voices ? `${date(voices.date)} 版，${voices.clips} 段（${mb(voices.bytes)} MB）` : "檢查中…";
+  $("voices").textContent = voices ? T.voicesInfo(date(voices.date), voices.clips, mb(voices.bytes)) : T.checking;
   $("state").className = "pill " + (s ? s.state : "missing");
-  $("state").textContent = s ? STATES[s.state] : "—";
+  $("state").textContent = s ? T.states[s.state] : "—";
   $("detail").textContent = s && s.state === "patched"
-    ? `${s.redirected} 個資源已導向日文` + (s.voice ? `，${date(s.voice.date)} 版` : "")
+    ? T.detail(s.redirected) + (s.voice ? T.detailDate(date(s.voice.date)) : "")
     : "";
 
   const outdated = s && s.state === "patched" && voices && s.voice?.id !== voices.manifest_sha1;
   const reapply = s && (s.state === "reverted" || outdated);
-  $("apply").textContent = reapply ? "重新套用日文語音" : "套用日文語音";
+  $("apply").textContent = reapply ? T.reapply : T.apply;
   $("apply").disabled = busy || !s || !voices || view.game_running || s.state === "missing";
   $("restore").disabled = busy || !s || view.game_running || s.state === "original";
   $("pickRoot").disabled = busy;
 
   const run = () => apply();
   if (view.error) banner(view.error, null, null, "err");
-  else if (view.game_running) banner("遊戲正在執行，請先關閉遊戲。", refresh, "重新檢查");
-  else if (s.state === "reverted") banner("遊戲更新後語音回到原版。", run, "重新套用");
-  else if (outdated) banner(s.voice ? `有新的日文語音（${date(voices.date)} 版）。` : "無法確認已套用的語音版本。", run, s.voice ? "更新" : "重新套用");
-  else if (update) banner(`有新版程式 v${update}。`, installUpdate, "更新並重新啟動");
+  else if (view.game_running) banner(T.gameRunning, refresh, T.recheck);
+  else if (s.state === "reverted") banner(T.reverted, run, T.reapplyShort);
+  else if (outdated && s.voice) banner(T.newVoices(date(voices.date)), run, T.update);
+  else if (outdated) banner(T.unknownVoice, run, T.reapplyShort);
+  else if (update) banner(T.newApp(update), installUpdate, T.updateRestart);
   else banner(null);
 }
 
@@ -86,31 +85,30 @@ async function task(fn) {
 
 const apply = () => task(async () => {
   const { bundles, clips } = await invoke("apply");
-  log(`完成：${clips} 段日文語音，${bundles} 個 bundle`, "ok");
+  log(T.done(clips, bundles), "ok");
 });
 
 // two-step confirm: window.confirm is unreliable in the webview
-const RESTORE = $("restore").textContent;
 let armed = null;
 function disarm() {
   clearTimeout(armed);
   armed = null;
-  $("restore").textContent = RESTORE;
+  $("restore").textContent = T.restore;
 }
 function restore() {
   if (!armed) {
-    $("restore").textContent = "確定還原？再按一次";
+    $("restore").textContent = T.restoreConfirm;
     armed = setTimeout(disarm, 4000);
     return;
   }
   disarm();
-  task(async () => { await invoke("restore"); log("已還原為原版語音", "ok"); });
+  task(async () => { await invoke("restore"); log(T.restored, "ok"); });
 }
 
 const installUpdate = () => task(() => invoke("install_update"));
 
 listen("progress", ({ payload: p }) => {
-  $("step").textContent = STEPS[p.step] || p.step;
+  $("step").textContent = T.steps[p.step] || p.step;
   const bytes = p.step === "download" || p.step === "app";
   $("count").textContent = p.total ? (bytes ? `${mb(p.done)} / ${mb(p.total)} MB` : `${p.done} / ${p.total}`) : "";
   if (p.total) { $("bar").max = p.total; $("bar").value = p.done; } else $("bar").removeAttribute("value");
@@ -121,7 +119,8 @@ $("restore").onclick = restore;
 $("pickRoot").onclick = async () => { try { if (await invoke("pick_root")) await refresh(); } catch (e) { log(String(e), "err"); } };
 window.addEventListener("focus", () => { if (!busy) refresh(); });
 
-refresh().then(async () => {
+// the backend needs the language before it produces any message
+invoke("set_lang", { zh: LANG === "zh" }).then(refresh).then(async () => {
   try { voices = await invoke("voices"); } catch (e) { log(String(e), "err"); }
   try { update = await invoke("app_update"); } catch { /* no update source in local builds */ }
   render();

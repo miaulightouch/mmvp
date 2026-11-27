@@ -144,13 +144,13 @@ fn rebuild_bundle(p: &Pkg, it: &Item, voices: &Voices) -> Result<Vec<u8>> {
     let raw = read_slot(&blob_path(&p.dir, it.blob), it.slot)?;
     let mut jp = HashMap::new();
     for (path, h) in &it.jp {
-        let fields = voices.fields(h).ok_or_else(|| anyhow!("manifest 缺少 {h}"))?;
+        let fields = voices.fields(h).ok_or_else(|| anyhow!(tr!("the manifest has no entry for {h}", "manifest 缺少 {h}")))?;
         jp.insert(path.clone(), audio::Replacement { fields, data: voices.clip(h)? });
     }
-    let audio = audio::Audio::parse(&raw)?.ok_or_else(|| anyhow!("沒有語音（遊戲檔案在掃描後被改動？）"))?;
+    let audio = audio::Audio::parse(&raw)?.ok_or_else(|| anyhow!(tr!("no voices in it (game files changed after the scan?)", "沒有語音（遊戲檔案在掃描後被改動？）")))?;
     let (bundle, n) = audio.replace(&jp)?;
     if n < it.jp.len() {
-        bail!("只換了 {n}/{} 段語音", it.jp.len());
+        bail!(tr!("only {n} of {} clips were replaced", "只換了 {n}/{} 段語音", it.jp.len()));
     }
     Ok(bundle)
 }
@@ -160,7 +160,7 @@ impl Install {
     pub fn open(root: &Path) -> Result<Install> {
         let ap = root.join("AssetPackages");
         if !ap.join("index").exists() && !ap.join("index.bak").exists() {
-            bail!("{} 不是瑪奇 Mobile 的遊戲目錄（找不到 AssetPackages\\index）", root.display());
+            bail!(tr!("{} is not a Mabinogi Mobile game folder (AssetPackages\\index not found)", "{} 不是瑪奇 Mobile 的遊戲目錄（找不到 AssetPackages\\index）", root.display()));
         }
         Ok(Install { root: root.to_path_buf() })
     }
@@ -186,12 +186,12 @@ impl Install {
     fn pkgs(&self) -> Result<Vec<Pkg>> {
         let mut out = Vec::new();
         for (family, member, name, dir) in self.dirs() {
-            let live = fs::read(dir.join("index")).with_context(|| format!("{name}/index 不存在（launcher 正在更新？）"))?;
+            let live = fs::read(dir.join("index")).with_context(|| tr!("{name}/index is missing (is the launcher updating?)", "{name}/index 不存在（launcher 正在更新？）"))?;
             let patched = index::is_patched(&live).with_context(|| format!("{name}/index"))?;
             let orig = if patched {
-                let bak = fs::read(dir.join("index.bak")).with_context(|| format!("{name}/index.bak 不存在，請用 launcher 修復遊戲"))?;
+                let bak = fs::read(dir.join("index.bak")).with_context(|| tr!("{name}/index.bak is missing; repair the game with the launcher", "{name}/index.bak 不存在，請用 launcher 修復遊戲"))?;
                 if index::is_patched(&bak)? {
-                    bail!("{name}/index.bak 不是原始檔，請用 launcher 修復遊戲");
+                    bail!(tr!("{name}/index.bak is not an original index; repair the game with the launcher", "{name}/index.bak 不是原始檔，請用 launcher 修復遊戲"));
                 }
                 bak
             } else {
@@ -319,7 +319,7 @@ impl Install {
 
     pub fn apply(&self, voices: &Voices, progress: Progress) -> Result<Applied> {
         if self.game_running() {
-            bail!("請先關閉遊戲");
+            bail!(tr!("Close the game first", "請先關閉遊戲"));
         }
         let pkgs = self.pkgs()?;
         let items = self.plan(&pkgs, voices, progress)?;
@@ -335,7 +335,7 @@ impl Install {
 
     pub fn restore(&self) -> Result<()> {
         if self.game_running() {
-            bail!("請先關閉遊戲");
+            bail!(tr!("Close the game first", "請先關閉遊戲"));
         }
         for p in self.pkgs()? {
             if p.patched {

@@ -1,26 +1,27 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>瑪奇 Mobile 日文語音</title>
+<title>mmvp</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<!-- texts come from i18n.js -->
 <main>
-  <header><h1>瑪奇 Mobile 日文語音</h1><span id="ver" class="muted"></span></header>
+  <header><h1 data-i18n="title"></h1><span id="ver" class="muted"></span></header>
 
   <section id="banner" class="banner" hidden></section>
 
   <section class="card">
-    <div class="row"><div class="label">遊戲目錄</div><div class="value"><span id="root">—</span> <span id="experimental" class="pill reverted" title="不是 Nexon Launcher 登記的台版安裝。其他地區的版本只要檔案架構相同就能套用，但未經驗證。" hidden>實驗性</span></div><button id="pickRoot" class="ghost">變更…</button></div>
-    <div class="row"><div class="label">日文語音</div><div class="value" id="voices">—</div><div></div></div>
-    <div class="row"><div class="label">狀態</div><div class="value"><span id="state" class="pill">—</span> <span id="detail" class="muted"></span></div><div></div></div>
+    <div class="row"><div class="label" data-i18n="root"></div><div class="value"><span id="root">—</span> <span id="experimental" class="pill reverted" data-i18n="experimental" data-i18n-title="experimentalTip" hidden></span></div><button id="pickRoot" class="ghost" data-i18n="change"></button></div>
+    <div class="row"><div class="label" data-i18n="voices"></div><div class="value" id="voices">—</div><div></div></div>
+    <div class="row"><div class="label" data-i18n="state"></div><div class="value"><span id="state" class="pill">—</span> <span id="detail" class="muted"></span></div><div></div></div>
   </section>
 
   <section class="actions">
-    <button id="apply" class="primary">套用日文語音</button>
-    <button id="restore">還原原版語音</button>
+    <button id="apply" class="primary" data-i18n="apply"></button>
+    <button id="restore" data-i18n="restore"></button>
   </section>
 
   <section class="card" id="progress" hidden>
@@ -30,6 +31,7 @@
 
   <section class="card log" id="logCard" hidden><ul id="log"></ul></section>
 </main>
+<script src="i18n.js"></script>
 <script src="main.js"></script>
 </body>
 </html>
