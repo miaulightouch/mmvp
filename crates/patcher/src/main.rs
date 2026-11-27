@@ -6,7 +6,7 @@
 mod locate;
 mod update;
 
-use mmvp_core::{Install, Source, Status, Step, Voices};
+use mmvp_patcher::{Install, Source, Status, Step, Voices};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};

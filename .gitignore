@@ -1,5 +1,3 @@
-.venv/
-__pycache__/
 target/
 node_modules/
 # JP dumps and scratch: never committed
@@ -7,5 +5,6 @@ work/
 # Cloudflare: settings and tokens stay local
 deploy.local.json
 .wrangler/
-.dev.vars
 *.key
+# local Python env (not used by the project)
+.venv/

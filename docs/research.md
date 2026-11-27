@@ -1,7 +1,7 @@
 # 格式與設計筆記
 
 使用方式見 [README](../README.md)。**[確認]** = 實際讀檔／解析驗證過；**[推論]** = 依旁證推測，未驗證。
-v0.1.x 之前的研究用腳本（mmvoice、scan_audio、build 等）已移除，需要時看 git 歷史。
+早期的 Python／PowerShell 研究腳本已移除，需要時看 git 歷史。
 
 ## 用戶端
 
@@ -48,7 +48,7 @@ u32 N, 16-byte[N], u32[] …                                           其他資
 - [確認] cutscene 的語音嵌在整個 cutscene prefab 的 bundle 裡（含 Camera、PlayableDirector、Material…），換語音就是換整個 bundle。
 - 規模（2026-11-27）：JP 7297 個語音路徑、7380 段不重複內容、95.6 MB；套到 TW 是 57 blob／255 bundle／6745 段。
 
-## 語音站台（`tools/mmvp_dump.py`）
+## 語音站台（`crates/dumper`，格式定義在 `crates/shared/src/site.rs`）
 
 ```
 latest.json     {"version": 3, "date", "manifest", "manifest_sha1", "clips", "bytes"}
@@ -57,10 +57,10 @@ clips/<sha1>    JP 原始 FSB5
 _headers, index.html
 ```
 
-- manifest 只含內容，語音沒變時 SHA1 不變；它就是語音版本 id，`mmvp_publish.ps1` 用它判斷要不要部署。
+- manifest 只含內容，語音沒變時 SHA1 不變；它就是語音版本 id，`mmvp-dumper publish` 用它判斷要不要部署。[確認] Rust 版 dumper 產出的 manifest 與原本 Python 版 byte 相同（SHA1 `04d6034f…`），dump 26 秒（Python 129–191 秒）。
 - Cloudflare Pages 單次部署上限 20000 個檔案；設定與 token 只在本機（`deploy.local.json`、`wrangler login`）。
 
-## 套用（`core/src/install.rs`）
+## 套用（`crates/patcher/src/install.rs`）
 
 1. 讀各 package 的原始 index（已套用時用 `index.bak`），只掃主表有引用的 slot，平行解析出 bundle 名稱與每段語音的 SHA1。
 2. 和 manifest 比對，下載不同且快取沒有的 JP 語音（16 條並行、共用連線池、逐檔驗 SHA1）。
@@ -80,5 +80,5 @@ _headers, index.html
 ## 建置
 
 - 本機：scoop 的 rustup（`stable-x86_64-pc-windows-gnu`）＋ `mingw`（dlltool）。GNU 版的 exe 需要旁邊有 `WebView2Loader.dll`；release 由 GitHub Actions 以 MSVC 建置，是單一 exe。
-- Python：`py -3.12 -m venv .venv`，`pip install -r requirements.txt`（UnityPy，只有 dump 用得到）。
+- 部署語音需要 Node.js（`npx wrangler`）；Tauri CLI 也透過 npm（`crates/patcher/package.json`）。
 - 發版設定（GitHub Actions）：secrets `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；variables `TAURI_UPDATER_PUBKEY`、`MMVP_SOURCE`。

@@ -1,45 +1,16 @@
-//! JP voice source: the static site made by tools/mmvp_dump.py (Cloudflare Pages, or a local directory
-//! for testing):
-//!   latest.json      {"version": 3, "date", "manifest", "manifest_sha1", "clips", "bytes"}
-//!   manifest.json    {"version": 3, "clips": {sha1: {"size", "fields"}}, "bundles", "default"}
-//!                    content only, so its SHA1 identifies the voice version
-//!   clips/<sha1>     raw FSB5 bytes, content-addressed
-//! Clips are downloaded on demand into a local cache and verified by SHA1.
-use crate::{net, sha1_hex};
+//! JP voices from the voice site (see mmvp_shared::site): the latest manifest, plus clips downloaded
+//! on demand into a local cache and verified by SHA1.
 use anyhow::{bail, Context, Result};
+use mmvp_shared::site::{Latest, Manifest, VERSION};
+use mmvp_shared::{net, sha1_hex};
 use rayon::prelude::*;
-use serde::Deserialize;
 use serde_json::{Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Deserialize, Clone, Debug)]
-pub struct Latest {
-    pub version: u32,
-    pub date: String,
-    pub manifest: String,
-    pub manifest_sha1: String,
-    pub clips: usize,
-    pub bytes: u64,
-}
-
-#[derive(Deserialize)]
-pub struct Clip {
-    pub size: u64,
-    pub fields: Map<String, Value>,
-}
-
-#[derive(Deserialize)]
-struct Manifest {
-    version: u32,
-    clips: HashMap<String, Clip>,
-    bundles: HashMap<String, HashMap<String, String>>,
-    default: HashMap<String, String>,
-}
-
-/// "https://..." / "http://..." or a local directory.
+/// The site's base URL, or a local dump directory (testing).
 #[derive(Clone, Debug)]
 pub struct Source(String);
 
@@ -56,7 +27,7 @@ impl Source {
     }
     pub fn latest(&self) -> Result<Latest> {
         let l: Latest = serde_json::from_slice(&self.get("latest.json")?).context("latest.json")?;
-        if l.version != 3 {
+        if l.version != VERSION {
             bail!("語音來源格式 {} 不支援，請更新程式", l.version);
         }
         Ok(l)
@@ -78,9 +49,6 @@ impl Voices {
             bail!("manifest.json 與 latest.json 不符（語音正在更新？請稍後再試）");
         }
         let manifest: Manifest = serde_json::from_slice(&raw).context("manifest.json")?;
-        if manifest.version != 3 {
-            bail!("manifest 格式 {} 不支援，請更新程式", manifest.version);
-        }
         Ok(Voices { source, latest, manifest, cache: cache.join("clips") })
     }
 
@@ -89,18 +57,12 @@ impl Voices {
         &self.latest.manifest_sha1
     }
 
-    /// JP clip for a container path: the variant of the same bundle if JP has it, else the most common one.
     pub fn lookup(&self, bundle: &str, path: &str) -> Option<&str> {
-        let m = &self.manifest;
-        m.bundles.get(bundle).and_then(|b| b.get(path)).or_else(|| m.default.get(path)).map(String::as_str)
+        self.manifest.lookup(bundle, path)
     }
 
     pub fn fields(&self, sha1: &str) -> Option<&Map<String, Value>> {
         self.manifest.clips.get(sha1).map(|c| &c.fields)
-    }
-
-    pub fn size(&self, sha1: &str) -> u64 {
-        self.manifest.clips.get(sha1).map_or(0, |c| c.size)
     }
 
     fn path(&self, sha1: &str) -> PathBuf {
@@ -111,7 +73,7 @@ impl Voices {
     pub fn fetch(&self, need: &HashSet<String>, progress: &(dyn Fn(u64, u64) + Sync)) -> Result<()> {
         fs::create_dir_all(&self.cache)?;
         let missing: Vec<&String> = need.iter().filter(|h| !self.path(h).exists()).collect();
-        let total: u64 = missing.iter().map(|h| self.size(h)).sum();
+        let total: u64 = missing.iter().filter_map(|h| self.manifest.clips.get(*h)).map(|c| c.size).sum();
         let done = AtomicU64::new(0);
         let pool = rayon::ThreadPoolBuilder::new().num_threads(net::PARALLEL).build()?;
         pool.install(|| {

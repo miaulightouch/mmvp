@@ -53,8 +53,8 @@ fn portable(app: &AppHandle, version: &str, progress: &dyn Fn(u64, u64)) -> Resu
             format!("https://github.com/{repo}/releases/download/v{version}/mmvp-portable.exe")
         }
     };
-    let sig = mmvp_core::net::get(&format!("{url}.sig"), &|_, _| {})?;
-    let exe_bytes = mmvp_core::net::get(&url, progress)?;
+    let sig = mmvp_shared::net::get(&format!("{url}.sig"), &|_, _| {})?;
+    let exe_bytes = mmvp_shared::net::get(&url, progress)?;
     verify(app, &exe_bytes, &sig)?;
     let exe = std::env::current_exe()?;
     let (new, old): (PathBuf, PathBuf) = (exe.with_extension("exe.new"), exe.with_extension("exe.old"));

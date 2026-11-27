@@ -14,6 +14,9 @@ const AUDIO_CLIP: i32 = 83;
 const ASSET_BUNDLE: i32 = 142;
 const NODE_SERIALIZED: u32 = 4;
 const ALIGN: usize = 32;
+/// AudioClip fields that describe the audio format; copied from JP when a clip is replaced.
+const FIELDS: [&str; 9] = ["m_LoadType", "m_Channels", "m_Frequency", "m_BitsPerSample", "m_Length",
+    "m_IsTrackerFormat", "m_Ambisonic", "m_SubsoundIndex", "m_CompressionFormat"];
 
 struct Clip {
     node: usize,
@@ -105,6 +108,19 @@ impl<'a> Audio<'a> {
             if !out.iter().any(|(p, _)| *p == path) {
                 out.push((path, crate::sha1_hex(self.bytes(i)?)));
             }
+        }
+        Ok(out)
+    }
+
+    /// Voice clips for the voice site: (container path, AudioClip format fields, raw audio), in object
+    /// order; clips without a container path or outside the voice filter are left out.
+    pub fn voices(&mut self) -> Result<Vec<(String, Map<String, Value>, Vec<u8>)>> {
+        let mut out = Vec::new();
+        for i in 0..self.clips.len() {
+            let Some(path) = self.clips[i].path.clone().filter(|p| crate::site::is_voice(p)) else { continue };
+            let val = &self.clips[i].val;
+            let fields = FIELDS.iter().filter_map(|k| Some((k.to_string(), val.get(k)?.json()?))).collect();
+            out.push((path, fields, self.bytes(i)?.to_vec()));
         }
         Ok(out)
     }

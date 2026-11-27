@@ -1,0 +1,17 @@
+[package]
+name = "mmvp-dumper"
+description = "Dump the JP client's voices into the voice site and publish it to Cloudflare Pages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mmvp-dumper"
+path = "src/main.rs"
+
+[dependencies]
+mmvp-shared.workspace = true
+anyhow.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true

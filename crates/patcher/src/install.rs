@@ -10,8 +10,9 @@
 //!  * every `NNNN.blob` >= 5000 in a package directory is ours;
 //!  * `<pkg>/index.mmvp.json` records the voice version and the original blobs used, to tell when
 //!    a re-apply is needed.
-use crate::index::{self, Key, REDIRECT_BASE};
-use crate::{audio, blob, sha1_hex, voices::Voices};
+use crate::voices::Voices;
+use mmvp_shared::index::{self, Key, REDIRECT_BASE};
+use mmvp_shared::{audio, blob, blob_no, sha1_hex};
 use anyhow::{anyhow, bail, Context, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -93,10 +94,6 @@ pub struct Install {
     pub root: PathBuf,
 }
 
-fn blob_no(name: &str) -> Option<u16> {
-    let stem = name.strip_suffix(".blob")?;
-    stem.bytes().all(|c| c.is_ascii_digit()).then(|| stem.parse().ok()).flatten()
-}
 
 fn stat(p: &Path) -> Result<(u64, u64)> {
     let m = fs::metadata(p).with_context(|| p.display().to_string())?;

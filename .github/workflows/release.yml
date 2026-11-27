@@ -1,4 +1,4 @@
-# Build mmvp and publish a GitHub Release with Tauri updater artifacts.
+# Build the patcher and publish a GitHub Release with Tauri updater artifacts.
 # Trigger: push a tag vX.Y.Z equal to [workspace.package] version in Cargo.toml.
 #
 # Repository settings (Settings > Secrets and variables > Actions):
@@ -19,34 +19,34 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        shell: pwsh
+        shell: bash
     steps:
       - uses: actions/checkout@v5
 
       - name: Check tag and configuration
         run: |
-          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          if ("v$v" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != Cargo.toml version $v" }
-          if (-not "${{ vars.TAURI_UPDATER_PUBKEY }}") { throw "set repository variable TAURI_UPDATER_PUBKEY" }
-          if (-not "${{ vars.MMVP_SOURCE }}") { throw "set repository variable MMVP_SOURCE" }
-          @{ plugins = @{ updater = @{
-            pubkey = "${{ vars.TAURI_UPDATER_PUBKEY }}"
-            endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
-          } } } | ConvertTo-Json -Depth 5 | Set-Content "$env:RUNNER_TEMP/updater.json"
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != Cargo.toml version $version"; exit 1; }
+          [ -n "${{ vars.TAURI_UPDATER_PUBKEY }}" ] || { echo "set repository variable TAURI_UPDATER_PUBKEY"; exit 1; }
+          [ -n "${{ vars.MMVP_SOURCE }}" ] || { echo "set repository variable MMVP_SOURCE"; exit 1; }
+          cat > "$RUNNER_TEMP/updater.json" <<EOF
+          {"plugins": {"updater": {"pubkey": "${{ vars.TAURI_UPDATER_PUBKEY }}",
+            "endpoints": ["https://github.com/${{ github.repository }}/releases/latest/download/latest.json"]}}}
+          EOF
 
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: app/package-lock.json
+          cache-dependency-path: crates/patcher/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
       - run: npm ci
-        working-directory: app
+        working-directory: crates/patcher
 
-      - run: cargo test -p mmvp-core --release
+      - run: cargo test --release --workspace
 
       - name: Build and publish the installer
         uses: tauri-apps/tauri-action@v0
@@ -57,7 +57,7 @@ jobs:
           MMVP_SOURCE: ${{ vars.MMVP_SOURCE }}
           MMVP_REPO: ${{ github.repository }}
         with:
-          projectPath: app
+          projectPath: crates/patcher
           tauriScript: npx tauri
           args: --config ${{ runner.temp }}/updater.json
           tagName: ${{ github.ref_name }}
@@ -70,11 +70,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        working-directory: app
+        working-directory: crates/patcher
         run: |
-          $p = "$env:RUNNER_TEMP/mmvp-portable.exe"
-          Copy-Item ../target/release/mmvp.exe $p
-          npx tauri signer sign $p
+          p="$RUNNER_TEMP/mmvp-portable.exe"
+          cp ../../target/release/mmvp.exe "$p"
+          npx tauri signer sign "$p"
           # v0.1.x portable copies update from the old asset name
-          Copy-Item $p "$env:RUNNER_TEMP/mmvoice-portable.exe"; Copy-Item "$p.sig" "$env:RUNNER_TEMP/mmvoice-portable.exe.sig"
-          gh release upload "${{ github.ref_name }}" $p "$p.sig" "$env:RUNNER_TEMP/mmvoice-portable.exe" "$env:RUNNER_TEMP/mmvoice-portable.exe.sig" --clobber
+          cp "$p" "$RUNNER_TEMP/mmvoice-portable.exe"; cp "$p.sig" "$RUNNER_TEMP/mmvoice-portable.exe.sig"
+          gh release upload "$GITHUB_REF_NAME" "$p" "$p.sig" "$RUNNER_TEMP/mmvoice-portable.exe" "$RUNNER_TEMP/mmvoice-portable.exe.sig" --clobber

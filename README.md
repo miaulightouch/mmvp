@@ -27,20 +27,22 @@ mmvp 找出含有語音的 bundle，換上日版語音後重新打包成 `9876.b
 
 ## 開發
 
+單一 Rust workspace：
+
 ```
-core/    mmvp-core：UnityFS、SerializedFile、AudioClip、blob / index、語音下載、套用與還原
-app/     mmvp：Tauri 2 GUI（ui/ 為純 HTML/JS）
-tools/   mmvp_dump.py：從日版 dump 語音；mmvp_publish.ps1：dump 並部署到 Cloudflare Pages
-docs/    研究筆記與驗證紀錄
+crates/shared    mmvp-shared：blob／index、UnityFS、SerializedFile、AudioClip、語音站台格式、HTTP
+crates/patcher   mmvp：套用邏輯（lib）＋ Tauri 2 GUI（ui/ 為純 HTML/JS）
+crates/dumper    mmvp-dumper：從日版 dump 語音站台，部署到 Cloudflare Pages
+docs/            格式與設計筆記
 ```
 
-```powershell
-cargo test -p mmvp-core                      # 單元測試；設 MMVP_TEST_ROOT / MMVP_TEST_SOURCE 可跑端到端測試
-.\tools\mmvp_publish.ps1                     # 發佈語音：dump → 有變動才部署
-git tag v0.2.0; git push origin v0.2.0       # 發佈程式：版本寫在 Cargo.toml，由 GitHub Actions 建置
+```sh
+cargo test --release --workspace         # 設 MMVP_TEST_ROOT / MMVP_TEST_SOURCE 可跑 patcher 端到端測試
+cargo run --release -p mmvp-dumper -- publish   # 發佈語音：dump → 有變動才部署（讀 deploy.local.json）
+git tag v0.2.0 && git push origin v0.2.0        # 發佈程式：版本寫在 Cargo.toml，由 GitHub Actions 建置
 ```
 
-設定、格式與驗證細節見 [docs/research.md](docs/research.md)。
+格式、設計與驗證細節見 [docs/research.md](docs/research.md)。
 
 ## 注意
 

@@ -8,9 +8,9 @@ const ALIGN: u32 = 0x4000;
 
 #[derive(Clone, Debug)]
 pub enum Val {
-    /// integers and bools (bools as 0/1)
     Int { v: i64, off: usize, size: usize },
-    Float { off: usize, size: usize },
+    Bool { v: bool, off: usize },
+    Float { v: f64, off: usize, size: usize },
     Str(String),
     /// byte arrays are skipped
     Bytes,
@@ -37,7 +37,17 @@ impl Val {
     /// (offset, size) of a primitive
     pub fn loc(&self) -> Option<(usize, usize)> {
         match *self {
-            Val::Int { off, size, .. } | Val::Float { off, size } => Some((off, size)),
+            Val::Int { off, size, .. } | Val::Float { off, size, .. } => Some((off, size)),
+            Val::Bool { off, .. } => Some((off, 1)),
+            _ => None,
+        }
+    }
+    /// JSON value of a primitive (bools as booleans, floats widened from f32 like Python does)
+    pub fn json(&self) -> Option<serde_json::Value> {
+        match *self {
+            Val::Int { v, .. } => Some(v.into()),
+            Val::Bool { v, .. } => Some(v.into()),
+            Val::Float { v, .. } => serde_json::Number::from_f64(v).map(Into::into),
             _ => None,
         }
     }
@@ -54,15 +64,16 @@ fn read_node(tree: &[TNode], i: usize, r: &mut Rd) -> Result<Val> {
     let int = |v: i64, size| Val::Int { v, off, size };
     let v = match n.ty.as_str() {
         "SInt8" => int(r.u8()? as i8 as i64, 1),
-        "UInt8" | "char" | "bool" => int(r.u8()? as i64, 1),
+        "UInt8" | "char" => int(r.u8()? as i64, 1),
+        "bool" => Val::Bool { v: r.u8()? != 0, off },
         "SInt16" | "short" => int(r.i16()? as i64, 2),
         "UInt16" | "unsigned short" => int(r.u16()? as i64, 2),
         "SInt32" | "int" | "Type*" => int(r.i32()? as i64, 4),
         "UInt32" | "unsigned int" => int(r.u32()? as i64, 4),
         "SInt64" | "long long" => int(r.i64()?, 8),
         "UInt64" | "unsigned long long" | "FileSize" => int(r.u64()? as i64, 8),
-        "float" => { r.take(4)?; Val::Float { off, size: 4 } }
-        "double" => { r.take(8)?; Val::Float { off, size: 8 } }
+        "float" => Val::Float { v: f32::from_bits(r.u32()?) as f64, off, size: 4 },
+        "double" => Val::Float { v: f64::from_bits(r.u64()?), off, size: 8 },
         _ => {
             let ch = children(tree, i);
             if n.ty == "string" {
