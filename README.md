@@ -11,6 +11,7 @@ Mabinogi Mobile Voice Pack (for TW)：把台版《瑪奇 Mobile》的韓語配�
 1. 從 [Releases](https://github.com/miaulightouch/mmvp/releases/latest) 下載 `mmvp.exe`，放在可寫入的資料夾直接執行（免安裝）。
 2. 關閉遊戲，確認遊戲目錄後按「套用日文語音」。
 3. 要恢復原版，按「還原原版語音」。
+
 ## 運作方式
 
 遊戲資源是一組 `NNNN.blob`（內含 Unity asset bundle）加上 `index`（資產與相依 bundle 的位置表）。
@@ -20,7 +21,7 @@ mmvp 找出含有語音的 bundle，換上日版語音後重新打包成 `9876.b
 ## 手動還原
 
 1. 將 AssetPackages 與 AssetPackages\Starter 中的 index.bak 改回 index
-2. 將 AssetPackages 與 AssetPackages\Starter 中的 9876.blob（或 9877.blob）移除
+2. 將 AssetPackages 與 AssetPackages\Starter 中的 9876.blob（或 9877.blob）與 index.mmvp.json 移除
 
 ## 開發
 
@@ -32,7 +33,7 @@ src-tauri/            Rust workspace root 與 mmvp app（lib.rs：Tauri 指令�
 src-tauri/shared/     mmvp-shared：blob／index、UnityFS、SerializedFile、AudioClip、語音站台格式、HTTP
 src-tauri/dumper/     mmvp-dumper：從日版 dump 語音站台的額外工具
 scripts/              publish-voices.mjs：dump 並在有變動時部署到 Cloudflare Pages
-docs/                 格式與設計筆記
+docs/                 技術筆記
 ```
 
 ```sh
@@ -44,7 +45,8 @@ npm run publish:voices       # dump → 和線上比對 → 有變動才部署�
 git tag v0.2.0 && git push origin v0.2.0   # 發佈程式：版本寫在 src-tauri/Cargo.toml，由 GitHub Actions 建置
 ```
 
-格式、設計與驗證細節見 [docs/research.md](docs/research.md)。
+技術細節見 [docs/research.md](docs/research.md)。
+
 ## 注意
 
 非官方工具，與 NEXON、devCAT 無關。使用風險自負。
