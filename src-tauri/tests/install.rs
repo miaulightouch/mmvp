@@ -2,7 +2,7 @@
 //!   MMVP_TEST_ROOT    a copy of …\MabinogiMobile_TW\appdata (it gets patched and restored)
 //!   MMVP_TEST_SOURCE  voice site URL or a local mmvp_dump.py output directory
 //! cargo test -p mmvp --release -- --nocapture
-use mmvp_patcher::{Install, Source, State, Voices};
+use mmvp_lib::patcher::{Install, Source, State, Voices};
 use std::path::PathBuf;
 
 #[test]

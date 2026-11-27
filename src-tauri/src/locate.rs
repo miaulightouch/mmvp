@@ -15,7 +15,7 @@ struct Settings {
 
 /// Accept the install root itself or its parent (…\MabinogiMobile_TW -> …\MabinogiMobile_TW\appdata).
 pub fn normalize(p: &Path) -> Option<PathBuf> {
-    [p.to_path_buf(), p.join("appdata")].into_iter().find(|c| mmvp_patcher::Install::open(c).is_ok())
+    [p.to_path_buf(), p.join("appdata")].into_iter().find(|c| crate::patcher::Install::open(c).is_ok())
 }
 
 /// [確認] The TW client is installed by the Nexon Launcher, which records it in

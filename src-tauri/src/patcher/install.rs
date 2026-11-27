@@ -10,7 +10,7 @@
 //!  * every `NNNN.blob` >= 5000 in a package directory is ours;
 //!  * `<pkg>/index.mmvp.json` records the voice version and the original blobs used, to tell when
 //!    a re-apply is needed.
-use crate::voices::Voices;
+use super::voices::Voices;
 use mmvp_shared::index::{self, Key, REDIRECT_BASE};
 use mmvp_shared::{audio, blob, blob_no, sha1_hex};
 use anyhow::{anyhow, bail, Context, Result};
