@@ -15,8 +15,13 @@ pub const INDEX_MAGIC: u32 = 0xE6A9_C3BA;
 /// Bit 15 of the blob field: the bundle lives in the Starter sub-package.
 pub const FLAG: u16 = 0x8000;
 pub const MASK: u16 = 0x7FFF;
-/// The one blob mmvp writes per package. Original blobs are numbered from 0000 up (about 800).
-pub const BLOB: u16 = 9876;
+/// The blobs mmvp writes: one per package, alternating between the two so a re-apply never
+/// overwrites the file the live index uses. Any other number is a game file.
+pub const BLOBS: [u16; 2] = [9876, 9877];
+
+pub fn is_ours(blob: u16) -> bool {
+    BLOBS.contains(&(blob & MASK))
+}
 
 pub type Key = (u16, u16);
 /// Redirects per package of a family: [base package, Starter sub-package].
@@ -70,16 +75,21 @@ pub fn slots(buf: &[u8]) -> Result<HashSet<Key>> {
     Ok(main.iter().map(|&o| { let (b, s) = pair(buf, o); (b & MASK, s) }).collect())
 }
 
-/// True if the index was written by mmvp (some location points at `BLOB`).
+/// True if the index was written by mmvp (some location points at one of `BLOBS`).
 pub fn is_patched(buf: &[u8]) -> Result<bool> {
-    let (main, deps) = locations(buf)?;
-    Ok(main.iter().chain(&deps).any(|&o| pair(buf, o).0 & MASK == BLOB))
+    Ok(!redirect_blobs(buf)?.is_empty())
 }
 
-/// Number of asset entries pointing at `BLOB`.
+/// Redirect blob numbers in use anywhere in a (patched) index.
+pub fn redirect_blobs(buf: &[u8]) -> Result<HashSet<u16>> {
+    let (main, deps) = locations(buf)?;
+    Ok(main.iter().chain(&deps).map(|&o| pair(buf, o).0 & MASK).filter(|&b| is_ours(b)).collect())
+}
+
+/// Number of main entries pointing at our blobs.
 pub fn redirected_entries(buf: &[u8]) -> Result<usize> {
     let (main, _) = locations(buf)?;
-    Ok(main.iter().filter(|&&o| pair(buf, o).0 & MASK == BLOB).count())
+    Ok(main.iter().filter(|&&o| is_ours(pair(buf, o).0)).count())
 }
 
 /// Rewrite every location (main entries and dependency table) found in `red[flag]`; the flag is kept.

@@ -21,7 +21,7 @@ mmvp 找出含有語音的 bundle，換上日版語音後重新打包成 `9876.b
 ## 手動還原
 
 1. 將 AssetPackages 與 AssetPackages\Starter 中的 index.bak 改回 index
-2. 將 AssetPackages 與 AssetPackages\Starter 中的 9876.blob 與 index.mmvp.json 移除
+2. 將 AssetPackages 與 AssetPackages\Starter 中的 9876.blob（或 9877.blob）與 index.mmvp.json 移除
 
 ## 開發
 

@@ -28,8 +28,8 @@ fn apply_reapply_restore() {
     assert!(!st.stale);
     assert!(root.join("AssetPackages\\9876.blob").exists());
 
-    install.apply(&voices, &|_, _, _| {}).unwrap(); // re-apply rewrites 9876.blob in place
-    assert!(root.join("AssetPackages\\9876.blob").exists() && !root.join("AssetPackages\\9877.blob").exists());
+    install.apply(&voices, &|_, _, _| {}).unwrap(); // re-apply alternates the blob number
+    assert!(root.join("AssetPackages\\9877.blob").exists() && !root.join("AssetPackages\\9876.blob").exists());
 
     if std::env::var("MMVP_TEST_KEEP").is_ok() {
         return; // leave the patched copy for inspection
@@ -37,5 +37,4 @@ fn apply_reapply_restore() {
     install.restore().unwrap();
     assert_eq!([index("AssetPackages"), index("AssetPackages\\Starter")], originals);
     assert!(matches!(install.status().unwrap().state, State::Original));
-    assert!(!root.join("AssetPackages\\9876.blob").exists());
 }

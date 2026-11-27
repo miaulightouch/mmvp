@@ -79,16 +79,16 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 1. **掃描**：讀原始 index（已套用時讀 `index.bak`），只解析被引用的 bundle，算出每段語音的 SHA1。
 2. **下載**：和 JP 不同、本機又沒快取的語音，平行下載並驗 SHA1。
 3. **重建**：只換掉語音串流，AudioClip 的欄位原地改寫（都是定長欄位，其他資料一個 byte 都不動），寫進新的 `9876.blob`。
-4. **提交**：先把 index 恢復成原始內容（第一次套用時備份為 `index.bak`），讓已經沒有任何地方引用 `9876.blob` → 放上新的 `9876.blob` → 改寫兩個 index 的資產表與相依表。任何一步中斷，index 都只會指向存在的檔案。
+4. **提交**：備份原始 index 為 `index.bak` → 放好新 blob → 改寫兩個 index 的資產表與相依表 → 刪掉舊 blob。任何一步中斷，index 都只會指向存在的檔案。
 
-mmvp 每個 package 只會新增 `9876.blob` 這一個 blob，原始的 blob 永遠不會被修改。
+重新套用時，新 blob 會在 9876 和 9877 之間輪替，不會覆蓋正在使用的檔案。原始的 blob 永遠不會被修改。
 
 ### 狀態判斷
 
 全部從安裝目錄本身看出來，不另外存狀態：
 
-- index 裡有指向 `9876.blob` 的位置：已套用。
-- `9876.blob`：mmvp 產生的檔案；其他編號的 blob 一律視為遊戲原檔。
+- index 裡有指向 `9876.blob` 或 `9877.blob` 的位置：已套用。
+- `9876.blob`、`9877.blob`：mmvp 產生的檔案；其他編號的 blob 一律視為遊戲原檔。
 - `index.mmvp.json`：記錄套用的語音版本，以及當時原始 blob 的大小與修改時間。用來判斷遊戲更新後要不要重新套用。
 
 ### 自我更新
