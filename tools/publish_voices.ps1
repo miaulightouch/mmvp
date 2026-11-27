@@ -3,7 +3,8 @@
 #   .\tools\publish_voices.ps1 -Force      deploy even if the voices are identical to the live site
 #   .\tools\publish_voices.ps1 -DryRun     dump, compare, print the deploy command only
 # Settings: deploy.local.json in the repo root (gitignored), e.g.
-#   { "project": "mmvoice-jp", "jp_root": "D:\\Nexon\\MabinogiMobile_JP" }
+#   { "project": "mmvoice-jp", "github": "OWNER/REPO", "jp_root": "D:\\Nexon\\MabinogiMobile_JP" }
+# "github" is linked from the landing page (index.html).
 # The live site URL is https://<project>.pages.dev unless "url" is set.
 param([switch]$Force, [switch]$DryRun, [int]$Jobs = 0)
 $ErrorActionPreference = 'Stop'
@@ -20,6 +21,7 @@ if (-not (Test-Path (Join-Path $jp 'AssetPackages\index'))) { throw "$jp\AssetPa
 
 $date = Get-Date -Format 'yyyy-MM-dd'
 $dumpArgs = @('tools\dump_site.py', $jp, '--date', $date)
+if ($cfg.github) { $dumpArgs += @('--repo', $cfg.github) } else { Write-Warning 'deploy.local.json has no "github": the landing page will not be written' }
 if ($Jobs -gt 0) { $dumpArgs += @('--jobs', $Jobs) }
 & .\.venv\Scripts\python.exe @dumpArgs
 if ($LASTEXITCODE) { throw "dump failed" }

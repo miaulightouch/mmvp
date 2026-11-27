@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>瑪奇 Mobile 日文語音</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f5f2; --card: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --line: #e3e1dc; --accent: #b23a48;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #18181a; --card: #222225; --fg: #ececee; --muted: #9a9aa1; --line: #343438; --accent: #e0606f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.65 "Segoe UI", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 56px 24px 40px; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 0 0 8px; font-weight: 700; letter-spacing: .01em; }
+  .lead { color: var(--muted); margin: 0 0 32px; }
+  .cta { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 36px; }
+  .btn { display: inline-block; padding: 11px 22px; border-radius: 10px; text-decoration: none; font-weight: 600;
+         border: 1px solid var(--line); color: var(--fg); background: var(--card); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn:hover { filter: brightness(1.06); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px 20px; margin-bottom: 28px; }
+  .row { display: grid; grid-template-columns: 7em 1fr; gap: 12px; padding: 12px 0; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .k { color: var(--muted); }
+  .mono { font-family: Consolas, "SF Mono", monospace; font-size: 14px; word-break: break-all; }
+  h2 { font-size: 18px; margin: 32px 0 10px; }
+  ol { padding-left: 1.3em; margin: 0; }
+  li + li { margin-top: 6px; }
+  .note { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); margin-top: 40px; padding-top: 16px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>瑪奇 Mobile 日文語音</h1>
+  <p class="lead">把台版用戶端的 NPC 與劇情語音換成日版配音。只替換語音，原始遊戲檔案不會被修改，隨時可以還原。</p>
+
+  <div class="cta">
+    <a class="btn primary" href="{{REPO_URL}}/releases/latest">下載安裝程式</a>
+    <a class="btn" href="{{REPO_URL}}">GitHub 專案</a>
+  </div>
+
+  <div class="card">
+    <div class="row"><div class="k">語音版本</div><div>{{DATE}}</div></div>
+    <div class="row"><div class="k">內容</div><div>{{CLIPS}} 段語音，{{MB}} MB</div></div>
+    <div class="row"><div class="k">版本 ID</div><div class="mono">{{ID}}</div></div>
+  </div>
+
+  <h2>使用方式</h2>
+  <ol>
+    <li>從 <a href="{{REPO_URL}}/releases/latest">GitHub Releases</a> 下載 <span class="mono">*-setup.exe</span> 並安裝（不需要系統管理員權限）。</li>
+    <li>關閉遊戲，開啟「MabiMobile JP Voice」，確認遊戲目錄後按「套用日文語音」。程式會自動從這裡下載需要的語音。</li>
+    <li>遊戲更新或有新的日文語音時，程式會提示重新套用；程式本身也會自動提示更新。</li>
+  </ol>
+
+  <p class="note">這個網站是安裝程式的資料來源，只提供語音檔與對照表，不是給瀏覽器直接使用的。非官方工具，與 NEXON、devCAT 無關。</p>
+</main>
+</body>
+</html>
