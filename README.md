@@ -137,7 +137,7 @@ PlatformResourcePackages/
 .\tools\deploy_pages.ps1 work\pages\2026-11-27                                     # wrangler pages deploy
 ```
 
-- `deploy.local.json`：`{"project": "<Pages 專案名>", "jp_root": "D:\\Nexon\\MabinogiMobile_JP"}`（`url` 可選，預設 `https://<project>.pages.dev`）。`publish_voices.ps1` 會先確認 JP 的 `AssetPackages\index` 存在（launcher 更新中會暫時刪掉）。
+- `deploy.local.json`：`{"project": "<Pages 專案名>", "github": "<OWNER/REPO>", "jp_root": "D:\\Nexon\\MabinogiMobile_JP"}`（`url` 可選，預設 `https://<project>.pages.dev`）。`github` 用來產生站台首頁 `index.html`（範本 `tools/site/index.html`：語音版本、下載安裝程式與 GitHub 連結，`noindex`）。`publish_voices.ps1` 會先確認 JP 的 `AssetPackages\index` 存在（launcher 更新中會暫時刪掉）。
 - manifest 只含內容（不含日期／時間），所以語音沒變時 `manifest_sha1` 不變，可以用來判斷要不要 deploy；日期只放在 `latest.json`。
 
 - 每次 dump 產生一個全新的日期目錄：`latest.json`（日期＋manifest SHA1）、`manifest.json`（version 3：每個 clip 的大小與 AudioClip 欄位、bundle 名稱＋路徑 → sha1、路徑預設版本）、`clips/<sha1>`（去重後的 JP 原始 FSB5）、`_headers`（clips 永久快取、json 不快取）。
