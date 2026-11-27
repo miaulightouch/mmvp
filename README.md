@@ -15,7 +15,7 @@ Mabinogi Mobile Voice Pack (for TW)：把台版《瑪奇 Mobile》的韓語配�
 ## 運作方式
 
 遊戲資源是一組 `NNNN.blob`（內含 Unity asset bundle）加上 `index`（資產與相依 bundle 的位置表）。
-mmvp 找出含有語音的 bundle，換上日版語音後重新打包成 `9876.blob`，再把 `index` 中所有指向這些 bundle 的位置改到新檔。
+mmvp 找出含有語音的 bundle，換上日版語音後重新打包成 `9876.blob`（重新套用時與 `9877.blob` 輪替），再把 `index` 中所有指向這些 bundle 的位置改到新檔。
 原始 `index` 備份為 `index.bak`。
 
 ## 手動還原

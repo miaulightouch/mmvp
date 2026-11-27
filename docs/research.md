@@ -78,7 +78,7 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 
 1. **掃描**：讀原始 index（已套用時讀 `index.bak`），只解析被引用的 bundle，算出每段語音的 SHA1。
 2. **下載**：和 JP 不同、本機又沒快取的語音，平行下載並驗 SHA1。
-3. **重建**：只換掉語音串流，AudioClip 的欄位原地改寫（都是定長欄位，其他資料一個 byte 都不動），寫進新的 `9876.blob`。
+3. **重建**：只換掉語音串流，AudioClip 的欄位原地改寫（都是定長欄位，其他資料一個 byte 都不動），寫進新的 blob（`9876.blob`，或 index 正在使用 9876 時改用 `9877.blob`）。
 4. **提交**：備份原始 index 為 `index.bak` → 放好新 blob → 改寫兩個 index 的資產表與相依表 → 刪掉舊 blob。任何一步中斷，index 都只會指向存在的檔案。
 
 重新套用時，新 blob 會在 9876 和 9877 之間輪替，不會覆蓋正在使用的檔案。原始的 blob 永遠不會被修改。
