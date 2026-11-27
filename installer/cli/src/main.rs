@@ -23,7 +23,7 @@ fn main() -> Result<()> {
         let mut skip = false;
         for a in &args {
             if skip { skip = false; continue; }
-            if a == "--blob-no" || a == "--data" { skip = true; continue; }
+            if a == "--blob-no" || a == "--data" || a == "--limit" { skip = true; continue; }
             if !a.starts_with("--") { v.push(a); }
         }
         v
@@ -49,6 +49,20 @@ fn main() -> Result<()> {
             let blob_no = opt("--blob-no").map(|s| s.parse()).transpose()?.unwrap_or(patcher::DEFAULT_BLOB_NO);
             let cache = data.join("scan_cache.json");
             patcher::patch(&Options { root: pos[1].as_ref(), voices: &voices, cache: &cache, rescan: flag("--rescan"), dry_run: flag("--dry-run"), blob_no }, &report)?;
+        }
+        Some("fetch") if pos.len() == 2 => {
+            // download every clip of the latest version into --data (benchmark / cache warm-up)
+            let data = opt("--data").map(PathBuf::from).unwrap_or_else(default_data);
+            let voices = Voices::open(Source::parse(pos[1]), &data.join("voices"))?;
+            let mut keys: Vec<&String> = voices.manifest.clips.keys().collect();
+            keys.sort();
+            let limit = opt("--limit").map(|s| s.parse()).transpose()?.unwrap_or(keys.len());
+            let all: std::collections::HashSet<String> = keys.into_iter().take(limit).cloned().collect();
+            let t0 = std::time::Instant::now();
+            let n = voices.ensure(&all, &|_, _| {})?;
+            let secs = t0.elapsed().as_secs_f64();
+            let mb: u64 = all.iter().filter_map(|h| voices.manifest.clips.get(h)).map(|c| c.size).sum();
+            println!("fetched {n} clips ({:.1} MB) in {secs:.1}s", mb as f64 / 1048576.0);
         }
         Some("restore") if pos.len() == 2 => patcher::restore(pos[1].as_ref(), &report)?,
         Some("status") if pos.len() == 2 => {

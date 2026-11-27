@@ -56,6 +56,22 @@ pub enum Source {
     Dir(PathBuf),
 }
 
+/// Download parallelism and the shared HTTP agent: one connection pool for all requests, so the
+/// ~7000 small clip downloads reuse kept-alive connections instead of a TLS handshake each.
+const DOWNLOAD_THREADS: usize = 16;
+
+fn agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(15))
+            .timeout(Duration::from_secs(60))
+            .max_idle_connections(DOWNLOAD_THREADS * 2)
+            .max_idle_connections_per_host(DOWNLOAD_THREADS * 2)
+            .build()
+    })
+}
+
 impl Source {
     /// "https://..." / "http://..." or a local directory.
     pub fn parse(s: &str) -> Source {
@@ -75,10 +91,23 @@ impl Source {
         match self {
             Source::Http(base) => {
                 let url = format!("{base}/{rel}");
-                let resp = ureq::get(&url).timeout(Duration::from_secs(60)).call().with_context(|| format!("GET {url}"))?;
-                let mut v = Vec::new();
-                resp.into_reader().take(64 << 20).read_to_end(&mut v)?;
-                Ok(v)
+                let mut last = None;
+                for attempt in 0..3u32 {
+                    if attempt > 0 {
+                        std::thread::sleep(Duration::from_millis(300 << attempt));
+                    }
+                    match agent().get(&url).call() {
+                        Ok(resp) => {
+                            let mut v = Vec::new();
+                            resp.into_reader().take(64 << 20).read_to_end(&mut v)?;
+                            return Ok(v);
+                        }
+                        // 4xx will not get better by retrying
+                        Err(ureq::Error::Status(code, _)) if (400..500).contains(&code) => bail!("GET {url}: HTTP {code}"),
+                        Err(e) => last = Some(e),
+                    }
+                }
+                Err(anyhow!("GET {url}: {}", last.map(|e| e.to_string()).unwrap_or_default()))
             }
             Source::Dir(d) => fs::read(d.join(rel)).with_context(|| format!("read {}", d.join(rel).display())),
         }
@@ -147,7 +176,7 @@ impl Voices {
         let missing: Vec<&String> = need.iter().filter(|h| !self.clip_path(h).exists()).collect();
         let total: u64 = missing.iter().map(|h| self.manifest.clips.get(*h).map_or(0, |c| c.size)).sum();
         let done = AtomicUsize::new(0);
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build()?;
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(DOWNLOAD_THREADS).build()?;
         pool.install(|| {
             missing.par_iter().try_for_each(|h| -> Result<()> {
                 let data = self.source.get(&format!("clips/{h}"))?;
