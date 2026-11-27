@@ -32,7 +32,7 @@ src/                  GUI 前端（純 HTML/JS）
 src-tauri/            Rust workspace root 與 mmvp app（lib.rs：Tauri 指令，patcher/：套用邏輯）
 src-tauri/shared/     mmvp-shared：blob／index、UnityFS、SerializedFile、AudioClip、語音站台格式、HTTP
 src-tauri/dumper/     mmvp-dumper：從日版 dump 語音站台的額外工具
-scripts/              publish-voices.mjs：dump 並在有變動時部署到 Cloudflare Pages
+scripts/              publish-voices.mjs：dump 並在有變動時部署
 docs/                 技術筆記
 ```
 

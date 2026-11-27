@@ -63,7 +63,7 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 
 ### 語音站台
 
-`mmvp-dumper` 從 JP 用戶端產生一個靜態站台，部署到 Cloudflare Pages。格式定義在 `src-tauri/shared/src/site.rs`。
+`mmvp-dumper` 從 JP 用戶端產生一個靜態站台並部署。格式定義在 `src-tauri/shared/src/site.rs`。
 
 | 檔案 | 內容 |
 |---|---|
@@ -104,6 +104,6 @@ Release 只有 `mmvp.exe`、它的簽章 `mmvp.exe.sig`，以及 `latest.json`�
 ## 開發環境
 
 - Rust：本機用 scoop 安裝的 rustup（GNU toolchain）加 `mingw`。GNU 版的 exe 執行時需要旁邊有 `WebView2Loader.dll`；正式版由 GitHub Actions 以 MSVC 建置，是單一 exe。
-- Node.js：根目錄 `package.json` 提供 Tauri CLI、wrangler 與常用指令（`npm run dev / test / dump / publish:voices`）。
+- Node.js：根目錄 `package.json` 提供 Tauri CLI、部署工具與常用指令（`npm run dev / test / dump / publish:voices`）。
 - GitHub Actions 設定：secrets `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；variables `TAURI_UPDATER_PUBKEY`、`MMVP_SOURCE`。
-- 部署語音：`deploy.local.json`（不進 git）與 `npx wrangler login`。
+- 部署語音：設定放在 `deploy.local.json`（不進 git）。
