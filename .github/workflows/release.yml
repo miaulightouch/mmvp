@@ -75,7 +75,7 @@ jobs:
           args: --config ${{ runner.temp }}/updater.json
           tagName: ${{ github.ref_name }}
           releaseName: "瑪奇 Mobile 日文語音 ${{ github.ref_name }}"
-          releaseBody: "`*-setup.exe`：安裝版（不需要系統管理員權限）。`mmvoice-portable.exe`：免安裝，直接執行。兩者都會自動提示更新。"
+          releaseBody: "`*-portable.exe`：免安裝，直接執行。`*-setup.exe`：安裝版（不需要系統管理員權限）。兩者都會自動提示更新。"
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
