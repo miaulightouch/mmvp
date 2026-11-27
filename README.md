@@ -8,7 +8,7 @@ Mabinogi Mobile Voice Pack (for TW): replaces the Korean voice-over of the Taiwa
 - The first download is about 100 MB; after that only changed voices are downloaded.
 - You are prompted to re-apply after a game update or a voice update. The program updates itself.
 
-The interface is in English or Traditional Chinese, following the system language.
+The interface is in English or Traditional Chinese, following the system language; the A/文 button switches it.
 
 ## Install
 

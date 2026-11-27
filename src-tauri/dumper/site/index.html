@@ -34,16 +34,26 @@
   li + li { margin-top: 6px; }
   .note { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); margin-top: 40px; padding-top: 16px; }
   a { color: var(--accent); }
-  /* both languages are in the page; the script below picks one by the browser language */
+  #lang { position: absolute; top: 16px; right: 16px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  /* both languages are in the page; the script below shows one */
   html[lang="en"] [lang="zh-Hant"], html[lang="zh-Hant"] [lang="en"] { display: none; }
 </style>
 </head>
 <body>
+<button id="lang" class="btn">A/文</button>
 <script>
-  if (navigator.language.toLowerCase().startsWith("zh")) {
-    document.documentElement.lang = "zh-Hant";
-    document.title = "瑪奇 Mobile 日文語音";
+  // the A/文 button's choice if there is one, else the browser language
+  const TITLES = { "en": "Mabinogi Mobile JP Voice", "zh-Hant": "瑪奇 Mobile 日文語音" };
+  function setLang(lang) {
+    document.documentElement.lang = lang;
+    document.title = TITLES[lang];
   }
+  setLang(localStorage.getItem("lang") ?? (navigator.language.toLowerCase().startsWith("zh") ? "zh-Hant" : "en"));
+  document.getElementById("lang").onclick = () => {
+    const lang = document.documentElement.lang === "en" ? "zh-Hant" : "en";
+    localStorage.setItem("lang", lang);
+    setLang(lang);
+  };
 </script>
 <main>
   <h1><span lang="en">Mabinogi Mobile JP Voice</span><span lang="zh-Hant">瑪奇 Mobile 日文語音</span></h1>

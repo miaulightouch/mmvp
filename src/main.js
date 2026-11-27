@@ -52,6 +52,7 @@ function render() {
   $("apply").disabled = busy || !s || !voices || view.game_running || s.state === "missing";
   $("restore").disabled = busy || !s || view.game_running || s.state === "original";
   $("pickRoot").disabled = busy;
+  $("lang").disabled = busy; // switching reloads the page
 
   const run = () => apply();
   if (view.error) banner(view.error, null, null, "err");

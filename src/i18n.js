@@ -1,8 +1,10 @@
 // GUI texts in English and Traditional Chinese. The language follows the system (any Chinese locale
-// gets Traditional Chinese, everything else English); the backend is told through `set_lang`.
+// gets Traditional Chinese, everything else English) until the A/文 button picks one; the backend is
+// told through `set_lang`.
 // Functions take the values to fill in. `mb` is megabytes, already formatted.
 const TEXTS = {
   en: {
+    language: "English",
     title: "Mabinogi Mobile JP Voice",
     root: "Game folder",
     voices: "JP voices",
@@ -33,6 +35,7 @@ const TEXTS = {
     restored: "Original voices restored",
   },
   zh: {
+    language: "繁體中文",
     title: "瑪奇 Mobile 日文語音",
     root: "遊戲目錄",
     voices: "日文語音",
@@ -64,11 +67,20 @@ const TEXTS = {
   },
 };
 
-const LANG = navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+// the A/文 button's choice if there is one, else the system language
+const LANG = localStorage.getItem("lang") ?? (navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en");
 const T = TEXTS[LANG];
+const OTHER = LANG === "zh" ? "en" : "zh";
 
 // static texts: <… data-i18n="key"> gets its text, <… data-i18n-title="key"> its tooltip
 document.documentElement.lang = LANG === "zh" ? "zh-Hant" : "en";
 document.title = T.title;
 for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = T[el.dataset.i18n];
 for (const el of document.querySelectorAll("[data-i18n-title]")) el.title = T[el.dataset.i18nTitle];
+
+// A/文: switch to the other language. Texts are applied at load, so the page reloads.
+document.getElementById("lang").title = TEXTS[OTHER].language;
+document.getElementById("lang").onclick = () => {
+  localStorage.setItem("lang", OTHER);
+  location.reload();
+};
