@@ -1,4 +1,4 @@
-# mmvp
+# MMVP - 瑪奇 Mobile 語音包
 
 [English](README.md) | **繁體中文**
 
