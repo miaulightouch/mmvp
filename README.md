@@ -1,4 +1,4 @@
-# mmvp
+# MMVP - Mabinogi Mobile Voice Pack
 
 **English** | [繁體中文](README_zh-tw.md)
 
