@@ -1,5 +1,5 @@
 # Build the patcher and publish a GitHub Release with Tauri updater artifacts.
-# Trigger: push a tag vX.Y.Z equal to [workspace.package] version in Cargo.toml.
+# Trigger: push a tag vX.Y.Z equal to [workspace.package] version in src-tauri/Cargo.toml.
 #
 # Repository settings (Settings > Secrets and variables > Actions):
 #   secrets.TAURI_SIGNING_PRIVATE_KEY, secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD   updater signing key
@@ -25,8 +25,8 @@ jobs:
 
       - name: Check tag and configuration
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != Cargo.toml version $version"; exit 1; }
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != src-tauri/Cargo.toml version $version"; exit 1; }
           [ -n "${{ vars.TAURI_UPDATER_PUBKEY }}" ] || { echo "set repository variable TAURI_UPDATER_PUBKEY"; exit 1; }
           [ -n "${{ vars.MMVP_SOURCE }}" ] || { echo "set repository variable MMVP_SOURCE"; exit 1; }
           cat > "$RUNNER_TEMP/updater.json" <<EOF
@@ -41,6 +41,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
 
       - run: npm ci
       - run: npm test
@@ -68,7 +70,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           p="$RUNNER_TEMP/mmvp-portable.exe"
-          cp target/release/mmvp.exe "$p"
+          cp src-tauri/target/release/mmvp.exe "$p"
           npx tauri signer sign "$p"
           # v0.1.x portable copies update from the old asset name
           cp "$p" "$RUNNER_TEMP/mmvoice-portable.exe"; cp "$p.sig" "$RUNNER_TEMP/mmvoice-portable.exe.sig"

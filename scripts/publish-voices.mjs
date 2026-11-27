@@ -14,7 +14,7 @@ const url = (/^https?:\/\//.test(cfg.url ?? "") ? cfg.url : `https://${cfg.url ?
 const repo = JSON.parse(readFileSync("package.json", "utf8")).repository.replace(/^github:/, "");
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: ["ignore", "pipe", "inherit"], encoding: "utf8", shell: process.platform === "win32" });
 
-const site = run("cargo", ["run", "--release", "-q", "-p", "mmvp-dumper", "--", jpRoot, "--out", "work/pages", "--repo", repo]).trim();
+const site = run("cargo", ["run", "--release", "-q", "--manifest-path", "src-tauri/Cargo.toml", "-p", "mmvp-dumper", "--", jpRoot, "--out", "work/pages", "--repo", repo]).trim();
 const next = JSON.parse(readFileSync(join(site, "latest.json"), "utf8"));
 const live = await fetch(`${url}/latest.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
 console.log(`live: ${live ? `${live.date} ${live.manifest_sha1}` : "-"}\nnew:  ${next.date} ${next.manifest_sha1}`);

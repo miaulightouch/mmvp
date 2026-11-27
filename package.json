@@ -3,10 +3,11 @@
   "private": true,
   "repository": "github:miaulightouch/mmvp",
   "scripts": {
+    "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
-    "test": "cargo test --release --workspace",
-    "dump": "cargo run --release -p mmvp-dumper --",
+    "test": "cargo test --release --workspace --manifest-path src-tauri/Cargo.toml",
+    "dump": "cargo run --release -q --manifest-path src-tauri/Cargo.toml -p mmvp-dumper --",
     "publish:voices": "node scripts/publish-voices.mjs"
   },
   "devDependencies": {
