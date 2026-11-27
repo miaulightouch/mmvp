@@ -78,8 +78,8 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 
 1. **掃描**：讀原始 index（已套用時讀 `index.bak`），只解析被引用的 bundle，算出每段語音的 SHA1。
 2. **下載**：和 JP 不同、本機又沒快取的語音，平行下載並驗 SHA1。
-3. **重建**：只換掉語音串流，AudioClip 的欄位原地改寫（都是定長欄位，其他資料一個 byte 都不動），寫進新的 blob（`9876.blob`，或 index 正在使用 9876 時改用 `9877.blob`）。
-4. **提交**：備份原始 index 為 `index.bak` → 放好新 blob → 改寫兩個 index 的資產表與相依表 → 刪掉舊 blob。任何一步中斷，index 都只會指向存在的檔案。
+3. **重建**：只換掉語音串流，AudioClip 的欄位原地改寫（都是定長欄位，其他資料一個 byte 都不動），直接寫進新的 blob（`9876.blob`，或 index 正在使用 9876 時改用 `9877.blob`）。index 還沒指向它，所以寫到一半中斷也不影響遊戲。
+4. **提交**：備份原始 index 為 `index.bak` → 改寫兩個 index 的資產表與相依表 → 刪掉舊 blob。任何一步中斷，index 都只會指向存在的檔案。
 
 重新套用時，新 blob 會在 9876 和 9877 之間輪替，不會覆蓋正在使用的檔案。原始的 blob 永遠不會被修改。
 
@@ -94,7 +94,7 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 ### 自我更新
 
 Release 只有 `mmvp.exe`、它的簽章 `mmvp.exe.sig`，以及 `latest.json`（版本號）。
-程式發現新版時，下載新的 exe，用內建的公鑰驗證簽章，把執行中的 exe 改名成 `.old`、換上新檔後重新啟動。
+程式發現新版時，下載最新 release 的 exe，用內建的公鑰驗證簽章，把執行中的 exe 改名成 `.old`、換上新檔後重新啟動。
 
 ## 已知限制
 
@@ -106,4 +106,4 @@ Release 只有 `mmvp.exe`、它的簽章 `mmvp.exe.sig`，以及 `latest.json`�
 - Rust：本機用 scoop 安裝的 rustup（GNU toolchain）加 `mingw`。GNU 版的 exe 執行時需要旁邊有 `WebView2Loader.dll`；正式版由 GitHub Actions 以 MSVC 建置，是單一 exe。
 - Node.js：根目錄 `package.json` 提供 Tauri CLI、部署工具與常用指令（`npm run dev / test / dump / publish:voices`）。
 - GitHub Actions 設定：secrets `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；variables `TAURI_UPDATER_PUBKEY`、`MMVP_SOURCE`。
-- 部署語音：設定放在 `deploy.local.json`（不進 git）。
+- 部署語音：設定放在 `deploy.local.json`（不進 git），三個欄位都必填：`project`（Pages 專案）、`url`（站台完整網址）、`jp_root`（日版用戶端目錄）。

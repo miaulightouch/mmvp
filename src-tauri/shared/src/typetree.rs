@@ -42,7 +42,7 @@ impl Val {
             _ => None,
         }
     }
-    /// JSON value of a primitive (bools as booleans, floats widened from f32 like Python does)
+    /// JSON value of a primitive (bools as booleans, f32 widened to f64: part of the manifest format)
     pub fn json(&self) -> Option<serde_json::Value> {
         match *self {
             Val::Int { v, .. } => Some(v.into()),

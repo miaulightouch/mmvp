@@ -31,7 +31,7 @@ pub struct Clip {
     pub fields: Map<String, Value>,
 }
 
-/// Field order is part of the format: the manifest SHA1 is the voice version id.
+/// Written as compact JSON. Field order is part of the format: the manifest SHA1 is the voice version id.
 #[derive(Serialize, Deserialize)]
 pub struct Manifest {
     pub version: u32,
@@ -48,10 +48,5 @@ impl Manifest {
     /// JP clip for a container path: the variant of the same bundle if JP has it, else the most common one.
     pub fn lookup(&self, bundle: &str, path: &str) -> Option<&str> {
         self.bundles.get(bundle).and_then(|b| b.get(path)).or_else(|| self.default.get(path)).map(String::as_str)
-    }
-
-    /// Compact JSON, byte-compatible with the original Python dumper (same SHA1 for the same voices).
-    pub fn to_json(&self) -> Vec<u8> {
-        serde_json::to_vec(self).expect("manifest serializes")
     }
 }

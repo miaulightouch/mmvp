@@ -6,5 +6,5 @@ work/
 deploy.local.json
 .wrangler/
 *.key
-# local Python env (not used by the project)
+# local leftovers (not used by the project)
 .venv/

@@ -1,47 +1,43 @@
 //! Self-update from GitHub Releases. A release carries `mmvp.exe`, its signature `mmvp.exe.sig`
-//! (Tauri / minisign format) and `latest.json` = {"version": "x.y.z"}. A newer exe is downloaded,
-//! checked against the public key built in, swapped for the running one, and started.
+//! (Tauri / minisign format) and `latest.json` = {"version": "x.y.z"}. When the latest release is
+//! newer, its exe is downloaded, checked against the public key built in, swapped for the running
+//! one, and started.
 //!
 //! Build-time settings (release workflow): MMVP_REPO = GitHub OWNER/REPO,
 //! MMVP_UPDATER_PUBKEY = the signing key's public key (base64, as printed by `tauri signer`).
 //! Testing: MMVP_UPDATE_BASE = a directory URL holding latest.json, mmvp.exe and mmvp.exe.sig.
+use crate::net;
 use anyhow::{anyhow, bail, Result};
 use base64::Engine;
-use mmvp_shared::net;
 use std::fs;
 
 const EXE: &str = "mmvp.exe";
 
-/// (latest.json URL, URL of the exe of a version)
-fn urls(version: &str) -> Result<(String, String)> {
+/// URL of a file of the latest release.
+fn url(file: &str) -> Result<String> {
     if let Ok(base) = std::env::var("MMVP_UPDATE_BASE") {
-        let base = base.trim_end_matches('/');
-        return Ok((format!("{base}/latest.json"), format!("{base}/{EXE}")));
+        return Ok(format!("{}/{file}", base.trim_end_matches('/')));
     }
     let repo = option_env!("MMVP_REPO").ok_or_else(|| anyhow!("這個版本沒有設定更新來源"))?;
-    Ok((
-        format!("https://github.com/{repo}/releases/latest/download/latest.json"),
-        format!("https://github.com/{repo}/releases/download/v{version}/{EXE}"),
-    ))
+    Ok(format!("https://github.com/{repo}/releases/latest/download/{file}"))
 }
 
-fn parse(v: &str) -> Vec<u64> {
+/// "x.y.z" as a comparable key.
+fn version_key(v: &str) -> Vec<u64> {
     v.trim_start_matches('v').split('.').map(|p| p.parse().unwrap_or(0)).collect()
 }
 
-/// Newer version on GitHub, if any.
+/// Version of the latest release, if newer than this build.
 pub fn check() -> Result<Option<String>> {
-    let (latest, _) = urls("")?;
-    let v: serde_json::Value = serde_json::from_slice(&net::get(&latest, &|_, _| {})?)?;
+    let v: serde_json::Value = serde_json::from_slice(&net::get(&url("latest.json")?, &|_, _| {})?)?;
     let version = v.get("version").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("latest.json 格式錯誤"))?;
-    Ok((parse(version) > parse(env!("CARGO_PKG_VERSION"))).then(|| version.to_string()))
+    Ok((version_key(version) > version_key(env!("CARGO_PKG_VERSION"))).then(|| version.to_string()))
 }
 
-/// Download `version`, verify, replace the running exe and start the new one. Returns only on error.
-pub fn install(version: &str, progress: &dyn Fn(u64, u64)) -> Result<()> {
-    let (_, url) = urls(version)?;
-    let sig = net::get(&format!("{url}.sig"), &|_, _| {})?;
-    let new = net::get(&url, progress)?;
+/// Download the latest exe, verify it, replace the running exe and start the new one. Returns only on error.
+pub fn install(progress: &dyn Fn(u64, u64)) -> Result<()> {
+    let sig = net::get(&url(&format!("{EXE}.sig"))?, &|_, _| {})?;
+    let new = net::get(&url(EXE)?, progress)?;
     verify(&new, &sig)?;
     let exe = std::env::current_exe()?;
     let (tmp, old) = (exe.with_extension("exe.new"), exe.with_extension("exe.old"));
@@ -56,18 +52,11 @@ pub fn install(version: &str, progress: &dyn Fn(u64, u64)) -> Result<()> {
     std::process::exit(0);
 }
 
-/// `<exe>.old` left by an update; the old process may still be exiting.
+/// Delete the `<exe>.old` an update left behind. If the old process is still exiting, it stays until
+/// the next start.
 pub fn cleanup_old() {
-    let Ok(old) = std::env::current_exe().map(|e| e.with_extension("exe.old")) else { return };
-    if old.exists() {
-        std::thread::spawn(move || {
-            for _ in 0..30 {
-                if fs::remove_file(&old).is_ok() {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
-        });
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = fs::remove_file(exe.with_extension("exe.old"));
     }
 }
 

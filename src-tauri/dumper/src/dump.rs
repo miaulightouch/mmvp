@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use mmvp_shared::audio::Audio;
 use mmvp_shared::site::{Clip, Latest, Manifest, VERSION, VOICE_FILTER};
-use mmvp_shared::{blob, blob_no, sha1_hex, PACKAGES};
+use mmvp_shared::{blob, blob_no, sha1_hex, FAMILIES};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -10,8 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const HEADERS: &str = "/clips/*\n  Cache-Control: public, max-age=31536000, immutable\n  Content-Type: application/octet-stream\n\
-/*.json\n  Cache-Control: no-cache\n/\n  Cache-Control: no-cache\n/index.html\n  Cache-Control: no-cache\n";
+const HEADERS: &str = include_str!("../site/_headers");
 const LANDING: &str = include_str!("../site/index.html");
 /// Cloudflare Pages: files per deployment.
 const MAX_FILES: usize = 20_000;
@@ -22,12 +21,9 @@ type BlobVoices = (Vec<(String, String, String)>, Vec<(String, Map<String, Value
 fn dump_blob(path: &Path) -> Result<BlobVoices> {
     let data = fs::read(path).with_context(|| path.display().to_string())?;
     let (mut refs, mut clips): BlobVoices = Default::default();
-    for (i, &(s, e)) in blob::read_table(path)?.iter().enumerate() {
-        let raw = &data[s as usize..e as usize];
-        if !raw.starts_with(b"UnityFS\0") {
-            continue;
-        }
-        let Some(mut audio) = Audio::parse(raw).with_context(|| format!("{}#{i}", path.display()))? else { continue };
+    let table = blob::table(&mut &data[..]).with_context(|| path.display().to_string())?;
+    for (i, &(s, e)) in table.iter().enumerate() {
+        let Some(mut audio) = Audio::parse(&data[s as usize..e as usize]).with_context(|| format!("{}#{i}", path.display()))? else { continue };
         for (p, fields, bytes) in audio.voices()? {
             let h = sha1_hex(&bytes);
             if !clips.iter().any(|c| c.0 == h) {
@@ -60,8 +56,8 @@ pub fn dump(jp_root: &Path, out: &Path, repo: Option<&str>) -> Result<PathBuf> {
     }
     let t0 = Instant::now();
     let mut blobs = Vec::new();
-    for pkg in PACKAGES {
-        let dir = jp_root.join(pkg.replace('/', "\\"));
+    for pkg in FAMILIES.iter().flatten() {
+        let dir = jp_root.join(pkg);
         let mut names: Vec<String> = fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         names.retain(|n| n.len() == 9 && blob_no(n).is_some());
         names.sort();
@@ -94,6 +90,9 @@ pub fn dump(jp_root: &Path, out: &Path, repo: Option<&str>) -> Result<PathBuf> {
         let best = v.iter().fold(&v[0], |b, x| if x.1 > b.1 { x } else { b });
         m.default.insert(path, best.0.clone());
     }
+    if m.clips.len() + 4 > MAX_FILES {
+        anyhow::bail!("{} clips: Cloudflare Pages allows at most {MAX_FILES} files per deployment", m.clips.len());
+    }
 
     let date = today();
     let site = out.join(&date);
@@ -103,7 +102,7 @@ pub fn dump(jp_root: &Path, out: &Path, repo: Option<&str>) -> Result<PathBuf> {
     for (h, data) in &payloads {
         fs::write(site.join("clips").join(h), data)?;
     }
-    let raw = m.to_json();
+    let raw = serde_json::to_vec(&m)?;
     fs::write(site.join("manifest.json"), &raw)?;
     let latest = Latest { version: VERSION, date, manifest: "manifest.json".into(), manifest_sha1: sha1_hex(&raw), clips: m.clips.len(), bytes };
     fs::write(site.join("latest.json"), serde_json::to_vec_pretty(&latest)?)?;
@@ -121,8 +120,5 @@ pub fn dump(jp_root: &Path, out: &Path, repo: Option<&str>) -> Result<PathBuf> {
         "{} blobs, {} paths, {} clips ({:.1} MB), {} bundles in {:.0}s -> {}\nvoice version {}",
         blobs.len(), m.default.len(), m.clips.len(), bytes as f64 / 1_048_576.0, m.bundles.len(), t0.elapsed().as_secs_f64(), site.display(), latest.manifest_sha1
     );
-    if m.clips.len() + 4 > MAX_FILES {
-        anyhow::bail!("Cloudflare Pages allows at most {MAX_FILES} files per deployment");
-    }
     Ok(site)
 }

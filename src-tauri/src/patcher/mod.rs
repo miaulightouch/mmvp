@@ -3,5 +3,5 @@
 pub mod install;
 pub mod voices;
 
-pub use install::{Install, State, Status, Step};
+pub use install::{Applied, Install, State, Status, Step, Voice};
 pub use voices::{Source, Voices};

@@ -1,5 +1,6 @@
-//! Where things are: our data directory, the remembered game folder, and the TW install recorded by
-//! the Nexon Launcher.
+//! Where things are: our data directory, the game folder the user picked, and the TW install recorded
+//! by the Nexon Launcher.
+use crate::patcher::Install;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,31 +15,24 @@ struct Settings {
 }
 
 /// Accept the install root itself or its parent (…\MabinogiMobile_TW -> …\MabinogiMobile_TW\appdata).
-pub fn normalize(p: &Path) -> Option<PathBuf> {
-    [p.to_path_buf(), p.join("appdata")].into_iter().find(|c| crate::patcher::Install::open(c).is_ok())
+pub fn normalize(p: &Path) -> anyhow::Result<PathBuf> {
+    let open = |c: &Path| Install::open(c).map(|i| i.root);
+    open(p).or_else(|e| open(&p.join("appdata")).map_err(|_| e))
 }
 
 /// [確認] The TW client is installed by the Nexon Launcher, which records it in
-/// %APPDATA%\NexonLauncher\installed-apps.db (JSON) as product 59826 "MabinogiMobile_TW".
+/// %APPDATA%\NexonLauncher\installed-apps.db (JSON) as product 59826.
 /// The JP client is product 2943 and must never be picked.
 fn nexon_launcher() -> Option<PathBuf> {
     let db = PathBuf::from(std::env::var_os("APPDATA")?).join("NexonLauncher").join("installed-apps.db");
     let v: serde_json::Value = serde_json::from_slice(&fs::read(db).ok()?).ok()?;
-    let apps = v.get("installedApps")?.as_object()?;
-    let tw = apps.get("59826").or_else(|| apps.values().find(|a| a.get("name").and_then(|n| n.as_str()) == Some("MabinogiMobile_TW")))?;
-    normalize(Path::new(tw.get("installPath")?.as_str()?))
+    normalize(Path::new(v.get("installedApps")?.get("59826")?.get("installPath")?.as_str()?)).ok()
 }
 
-/// The remembered folder if still valid, else the Nexon Launcher's record (remembered from then on).
+/// The folder the user picked if still valid, else the Nexon Launcher's record.
 pub fn root() -> Option<PathBuf> {
-    let path = data_dir().join("settings.json");
-    let saved: Settings = fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    if let Some(r) = saved.root.as_deref().and_then(normalize) {
-        return Some(r);
-    }
-    let found = nexon_launcher()?;
-    set_root(&found);
-    Some(found)
+    let saved: Settings = fs::read(data_dir().join("settings.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    saved.root.and_then(|r| normalize(&r).ok()).or_else(nexon_launcher)
 }
 
 pub fn set_root(root: &Path) {

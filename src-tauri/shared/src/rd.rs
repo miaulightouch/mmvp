@@ -20,9 +20,6 @@ impl<'a> Rd<'a> {
     pub fn new(buf: &'a [u8], be: bool) -> Self {
         Rd { buf, pos: 0, be }
     }
-    pub fn at(buf: &'a [u8], pos: usize, be: bool) -> Self {
-        Rd { buf, pos, be }
-    }
     pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.pos + n > self.buf.len() {
             bail!("read past end ({} + {} > {})", self.pos, n, self.buf.len());
@@ -48,10 +45,6 @@ impl<'a> Rd<'a> {
         Ok(s)
     }
     pub fn align(&mut self, n: usize) {
-        self.pos = (self.pos + n - 1) / n * n;
+        self.pos = self.pos.next_multiple_of(n);
     }
-}
-
-pub fn align_up(x: usize, n: usize) -> usize {
-    (x + n - 1) / n * n
 }

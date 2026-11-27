@@ -1,6 +1,6 @@
 //! End-to-end check against a real (copied!) TW install; skipped unless both are set:
 //!   MMVP_TEST_ROOT    a copy of …\MabinogiMobile_TW\appdata (it gets patched and restored)
-//!   MMVP_TEST_SOURCE  voice site URL or a local mmvp_dump.py output directory
+//!   MMVP_TEST_SOURCE  voice site URL or a local mmvp-dumper output directory
 //! cargo test -p mmvp --release -- --nocapture
 use mmvp_lib::patcher::{Install, Source, State, Voices};
 use std::path::PathBuf;
@@ -20,11 +20,11 @@ fn apply_reapply_restore() {
     assert!(matches!(install.status().unwrap().state, State::Original));
 
     let t = std::time::Instant::now();
-    let (bundles, clips) = install.apply(&voices, &|_, _, _| {}).unwrap();
-    eprintln!("applied {bundles} bundles / {clips} clips in {:.1}s", t.elapsed().as_secs_f64());
+    let applied = install.apply(&voices, &|_, _, _| {}).unwrap();
+    eprintln!("applied {} bundles / {} clips in {:.1}s", applied.bundles, applied.clips, t.elapsed().as_secs_f64());
     let st = install.status().unwrap();
     assert!(matches!(st.state, State::Patched));
-    assert_eq!(st.voice.as_ref().map(|v| v.0.as_str()), Some(voices.id()));
+    assert_eq!(st.voice.map(|v| v.id), Some(voices.latest.manifest_sha1.clone()));
     assert!(!st.stale);
     assert!(root.join("AssetPackages\\9876.blob").exists());
 

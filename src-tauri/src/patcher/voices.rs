@@ -1,8 +1,9 @@
 //! JP voices from the voice site (see mmvp_shared::site): the latest manifest, plus clips downloaded
 //! on demand into a local cache and verified by SHA1.
 use anyhow::{bail, Context, Result};
+use crate::net;
+use mmvp_shared::sha1_hex;
 use mmvp_shared::site::{Latest, Manifest, VERSION};
-use mmvp_shared::{net, sha1_hex};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -36,6 +37,7 @@ impl Source {
 
 pub struct Voices {
     source: Source,
+    /// `latest.manifest_sha1` is the voice version id
     pub latest: Latest,
     manifest: Manifest,
     cache: PathBuf,
@@ -50,11 +52,6 @@ impl Voices {
         }
         let manifest: Manifest = serde_json::from_slice(&raw).context("manifest.json")?;
         Ok(Voices { source, latest, manifest, cache: cache.join("clips") })
-    }
-
-    /// Voice version id (manifest SHA1).
-    pub fn id(&self) -> &str {
-        &self.latest.manifest_sha1
     }
 
     pub fn lookup(&self, bundle: &str, path: &str) -> Option<&str> {

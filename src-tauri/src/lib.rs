@@ -3,19 +3,26 @@
 //! Build-time settings (set by the release workflow): MMVP_SOURCE = voice site URL, MMVP_REPO =
 //! GitHub OWNER/REPO. MMVP_SOURCE can be overridden at run time (a URL or a local dump directory).
 mod locate;
+mod net;
 pub mod patcher;
 mod update;
 
-use patcher::{Install, Source, Status, Step, Voices};
+use mmvp_shared::site::Latest;
+use patcher::{Applied, Install, Source, Status, Voices};
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Emitter, Manager};
+use std::sync::{Mutex, MutexGuard, TryLockError};
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
 
 type Res<T> = Result<T, String>;
 
 fn err(e: impl std::fmt::Display) -> String {
     format!("{e:#}")
+}
+
+/// Run blocking work off the main thread.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Res<T> + Send + 'static) -> Res<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(err)?
 }
 
 fn source() -> Res<Source> {
@@ -28,30 +35,24 @@ fn install() -> Res<Install> {
     Install::open(&root).map_err(err)
 }
 
-/// Only one apply / restore / update at a time.
-struct Busy(AtomicBool);
-struct Guard<'a>(&'a AtomicBool);
-impl Drop for Guard<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+/// Only one apply / restore / update at a time: hold the guard for the duration.
+fn busy() -> Res<MutexGuard<'static, ()>> {
+    static BUSY: Mutex<()> = Mutex::new(());
+    match BUSY.try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(TryLockError::Poisoned(e)) => Ok(e.into_inner()), // the previous holder panicked: not busy
+        Err(TryLockError::WouldBlock) => Err("另一個作業正在進行中".into()),
     }
-}
-fn busy(app: &AppHandle) -> Res<Guard<'_>> {
-    let b = &app.state::<Busy>().inner().0;
-    if b.swap(true, Ordering::SeqCst) {
-        return Err("另一個作業正在進行中".into());
-    }
-    Ok(Guard(b))
 }
 
 #[derive(Clone, Serialize)]
-struct Progress {
-    step: &'static str,
+struct Progress<S> {
+    step: S,
     done: u64,
     total: u64,
 }
 
-fn emit(app: &AppHandle, step: &'static str, done: u64, total: u64) {
+fn emit(app: &AppHandle, step: impl Serialize + Clone, done: u64, total: u64) {
     let _ = app.emit("progress", Progress { step, done, total });
 }
 
@@ -59,102 +60,76 @@ fn emit(app: &AppHandle, step: &'static str, done: u64, total: u64) {
 struct View {
     version: &'static str,
     root: Option<String>,
-    error: Option<String>,
     game_running: bool,
     status: Option<Status>,
+    error: Option<String>,
 }
 
 #[tauri::command]
-fn state() -> View {
-    let mut v = View { version: env!("CARGO_PKG_VERSION"), root: None, error: None, game_running: false, status: None };
-    match install() {
-        Ok(i) => {
-            v.root = Some(i.root.display().to_string());
-            v.game_running = i.game_running();
-            match i.status() {
-                Ok(s) => v.status = Some(s),
-                Err(e) => v.error = Some(err(e)),
-            }
-        }
-        Err(e) => v.error = Some(e),
-    }
-    v
-}
-
-#[tauri::command]
-fn pick_root(app: AppHandle) -> Res<bool> {
-    let Some(p) = app.dialog().file().set_title("選擇瑪奇 Mobile（台版）遊戲目錄").blocking_pick_folder() else { return Ok(false) };
-    let root = locate::normalize(&p.into_path().map_err(err)?).ok_or("這不是瑪奇 Mobile 的遊戲目錄（找不到 AssetPackages\\index）")?;
-    locate::set_root(&root);
-    Ok(true)
-}
-
-#[derive(Serialize)]
-struct VoicesInfo {
-    id: String,
-    date: String,
-    clips: usize,
-    bytes: u64,
-}
-
-#[tauri::command]
-async fn voices() -> Res<VoicesInfo> {
-    let l = tauri::async_runtime::spawn_blocking(|| source()?.latest().map_err(err)).await.map_err(err)??;
-    Ok(VoicesInfo { id: l.manifest_sha1, date: l.date, clips: l.clips, bytes: l.bytes })
-}
-
-#[tauri::command]
-async fn apply(app: AppHandle) -> Res<(usize, usize)> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let _g = busy(&app)?;
-        let i = install()?;
-        let v = Voices::open(source()?, &locate::data_dir().join("voices")).map_err(err)?;
-        let progress = |s: Step, d, t| {
-            let step = match s {
-                Step::Scan => "scan",
-                Step::Download => "download",
-                Step::Rebuild => "rebuild",
-                Step::Commit => "commit",
-            };
-            emit(&app, step, d, t);
+async fn state() -> Res<View> {
+    blocking(|| {
+        let (root, game_running, status) = match install() {
+            Ok(i) => (Some(i.root.display().to_string()), i.game_running(), i.status().map_err(err)),
+            Err(e) => (None, false, Err(e)),
         };
-        i.apply(&v, &progress).map_err(err)
+        let error = status.as_ref().err().cloned();
+        Ok(View { version: env!("CARGO_PKG_VERSION"), root, game_running, status: status.ok(), error })
     })
     .await
-    .map_err(err)?
 }
 
 #[tauri::command]
-async fn restore(app: AppHandle) -> Res<()> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let _g = busy(&app)?;
+async fn pick_root(app: AppHandle) -> Res<bool> {
+    blocking(move || {
+        let Some(p) = app.dialog().file().set_title("選擇瑪奇 Mobile（台版）遊戲目錄").blocking_pick_folder() else { return Ok(false) };
+        locate::set_root(&locate::normalize(&p.into_path().map_err(err)?).map_err(err)?);
+        Ok(true)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn voices() -> Res<Latest> {
+    blocking(|| source()?.latest().map_err(err)).await
+}
+
+#[tauri::command]
+async fn apply(app: AppHandle) -> Res<Applied> {
+    blocking(move || {
+        let _busy = busy()?;
+        let voices = Voices::open(source()?, &locate::data_dir().join("voices")).map_err(err)?;
+        install()?.apply(&voices, &|step, done, total| emit(&app, step, done, total)).map_err(err)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn restore() -> Res<()> {
+    blocking(|| {
+        let _busy = busy()?;
         install()?.restore().map_err(err)
     })
     .await
-    .map_err(err)?
 }
 
 #[tauri::command]
 async fn app_update() -> Res<Option<String>> {
-    tauri::async_runtime::spawn_blocking(|| update::check().map_err(err)).await.map_err(err)?
+    blocking(|| update::check().map_err(err)).await
 }
 
 #[tauri::command]
-async fn install_update(app: AppHandle, version: String) -> Res<()> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let _g = busy(&app)?;
-        update::install(&version, &|d, t| emit(&app, "app", d, t)).map_err(err)
+async fn install_update(app: AppHandle) -> Res<()> {
+    blocking(move || {
+        let _busy = busy()?;
+        update::install(&|done, total| emit(&app, "app", done, total)).map_err(err)
     })
     .await
-    .map_err(err)?
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     update::cleanup_old();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(Busy(AtomicBool::new(false)))
         .invoke_handler(tauri::generate_handler![state, pick_root, voices, apply, restore, app_update, install_update])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

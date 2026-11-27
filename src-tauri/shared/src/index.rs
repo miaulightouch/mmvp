@@ -24,8 +24,6 @@ pub fn is_ours(blob: u16) -> bool {
 }
 
 pub type Key = (u16, u16);
-/// Redirects per package of a family: [base package, Starter sub-package].
-pub type FamilyRedirect<'a> = [&'a HashMap<Key, Key>; 2];
 
 fn rd_u32(buf: &[u8], p: usize) -> Result<u32> {
     match buf.get(p..p + 4) {
@@ -92,9 +90,10 @@ pub fn redirected_entries(buf: &[u8]) -> Result<usize> {
     Ok(main.iter().filter(|&&o| is_ours(pair(buf, o).0)).count())
 }
 
-/// Rewrite every location (main entries and dependency table) found in `red[flag]`; the flag is kept.
-/// -> (new index bytes, main entries changed, dependency locations changed)
-pub fn patch(buf: &[u8], red: FamilyRedirect) -> Result<(Vec<u8>, usize, usize)> {
+/// Rewrite every location (main entries and dependency table) found in `red[flag]`, the redirects of
+/// the family's [base package, Starter sub-package]; the flag is kept.
+/// -> (new index bytes, locations changed)
+pub fn patch(buf: &[u8], red: &[HashMap<Key, Key>; 2]) -> Result<(Vec<u8>, usize)> {
     let (main, deps) = locations(buf)?;
     let mut out = buf.to_vec();
     let mut apply = |o: usize| -> bool {
@@ -109,9 +108,8 @@ pub fn patch(buf: &[u8], red: FamilyRedirect) -> Result<(Vec<u8>, usize, usize)>
             None => false,
         }
     };
-    let changed_main = main.iter().filter(|&&o| apply(o)).count();
-    let changed_deps = deps.iter().filter(|&&o| apply(o)).count();
-    Ok((out, changed_main, changed_deps))
+    let changed = main.iter().chain(&deps).filter(|&&o| apply(o)).count();
+    Ok((out, changed))
 }
 
 #[cfg(test)]
@@ -145,8 +143,8 @@ mod tests {
         assert!(!is_patched(&idx).unwrap());
         let base: HashMap<Key, Key> = [((1, 0), (9876, 0))].into();
         let starter: HashMap<Key, Key> = [((2, 5), (9876, 3))].into();
-        let (out, main, deps) = patch(&idx, [&base, &starter]).unwrap();
-        assert_eq!((main, deps), (2, 2));
+        let (out, changed) = patch(&idx, &[base, starter]).unwrap();
+        assert_eq!(changed, 4);
         assert_eq!(pair(&out, 8), (9876, 0));
         assert_eq!(pair(&out, 12), (0x8000 | 9876, 3)); // package bit kept
         assert_eq!(pair(&out, 20), (9876, 0)); // dependency key

@@ -1996,6 +1996,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "ureq",
 ]
 
 [[package]]
@@ -2017,7 +2018,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
- "ureq",
 ]
 
 [[package]]

@@ -38,12 +38,16 @@ pub struct Audio<'a> {
 /// JP replacement for one clip: AudioClip fields to overwrite and the raw audio.
 pub struct Replacement<'a> {
     pub fields: &'a Map<String, Value>,
-    pub data: &'a [u8],
+    pub data: Vec<u8>,
 }
 
 impl<'a> Audio<'a> {
-    /// None if the bundle holds no AudioClip. Decompresses only up to the serialized files.
+    /// None if `raw` is not a UnityFS bundle or holds no AudioClip. Decompresses only up to the
+    /// serialized files.
     pub fn parse(raw: &'a [u8]) -> Result<Option<Audio<'a>>> {
+        if !raw.starts_with(b"UnityFS\0") {
+            return Ok(None);
+        }
         let mut bundle = Bundle::parse(raw)?;
         let (mut name, mut clips) = (String::new(), Vec::new());
         for ni in 0..bundle.nodes.len() {
@@ -146,7 +150,7 @@ impl<'a> Audio<'a> {
             for c in clips {
                 let rep = c.path.as_ref().and_then(|p| jp.get(p));
                 let data = match rep {
-                    Some(r) => r.data,
+                    Some(r) => r.data.as_slice(),
                     None => old.get(c.offset..c.offset + c.size).ok_or_else(|| anyhow!("clip past end of {stream}"))?,
                 };
                 buf.resize(buf.len().next_multiple_of(ALIGN), 0);

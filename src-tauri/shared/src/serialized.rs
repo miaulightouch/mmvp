@@ -90,7 +90,9 @@ impl SerializedFile {
             data_offset = h.i64()? as usize;
             let _unk = h.i64()?;
         }
-        let mut r = Rd::at(buf, h.pos, false);
+        // the header is big-endian, everything after it little-endian
+        let mut r = h;
+        r.be = false;
         let _unity = r.cstr()?;
         let _platform = r.i32()?;
         let type_tree = r.u8()? != 0;

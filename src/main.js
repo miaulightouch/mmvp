@@ -27,7 +27,7 @@ function banner(text, action, label, cls = "") {
   if (!text) return;
   el.className = "banner " + cls;
   el.replaceChildren(document.createTextNode(text));
-  if (action) {
+  if (action && !busy) {
     const b = document.createElement("button");
     b.textContent = label;
     b.onclick = action;
@@ -44,10 +44,10 @@ function render() {
   $("state").className = "pill " + (s ? s.state : "missing");
   $("state").textContent = s ? STATES[s.state] : "—";
   $("detail").textContent = s && s.state === "patched"
-    ? `${s.redirected} 個資源已導向日文` + (s.voice ? `，${date(s.voice[1])} 版` : "")
+    ? `${s.redirected} 個資源已導向日文` + (s.voice ? `，${date(s.voice.date)} 版` : "")
     : "";
 
-  const outdated = s && s.state === "patched" && voices && (!s.voice || s.voice[0] !== voices.id);
+  const outdated = s && s.state === "patched" && voices && s.voice?.id !== voices.manifest_sha1;
   const reapply = s && (s.state === "reverted" || s.stale || outdated);
   $("apply").textContent = reapply ? "重新套用日文語音" : "套用日文語音";
   $("apply").disabled = busy || !s || !voices || view.game_running || s.state === "missing";
@@ -70,6 +70,7 @@ async function refresh() {
 }
 
 async function task(fn) {
+  if (busy) return;
   busy = true;
   $("progress").hidden = false;
   render();
@@ -84,24 +85,29 @@ async function task(fn) {
 }
 
 const apply = () => task(async () => {
-  const [bundles, clips] = await invoke("apply");
+  const { bundles, clips } = await invoke("apply");
   log(`完成：${clips} 段日文語音，${bundles} 個 bundle`, "ok");
 });
 
+// two-step confirm: window.confirm is unreliable in the webview
+const RESTORE = $("restore").textContent;
 let armed = null;
-function restore() {
-  if (!armed) { // two-step confirm: window.confirm is unreliable in the webview
-    $("restore").textContent = "確定還原？再按一次";
-    armed = setTimeout(() => { armed = null; $("restore").textContent = "還原原版語音"; }, 4000);
-    return;
-  }
+function disarm() {
   clearTimeout(armed);
   armed = null;
-  $("restore").textContent = "還原原版語音";
+  $("restore").textContent = RESTORE;
+}
+function restore() {
+  if (!armed) {
+    $("restore").textContent = "確定還原？再按一次";
+    armed = setTimeout(disarm, 4000);
+    return;
+  }
+  disarm();
   task(async () => { await invoke("restore"); log("已還原為原版（韓語）語音", "ok"); });
 }
 
-const installUpdate = () => task(() => invoke("install_update", { version: update }));
+const installUpdate = () => task(() => invoke("install_update"));
 
 listen("progress", ({ payload: p }) => {
   $("step").textContent = STEPS[p.step] || p.step;

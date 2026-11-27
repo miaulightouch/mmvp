@@ -2,7 +2,7 @@
 //! reproduces the layout UnityPy's `save(packer="lz4")` produced for the version verified in game:
 //! flags 0xC2 (LZ4 | directory combined | block info at the end), 128 KiB chunks, a chunk that does
 //! not shrink is stored raw (flag 0).
-use crate::rd::{align_up, Rd};
+use crate::rd::Rd;
 use anyhow::{bail, Context, Result};
 
 const CHUNK: usize = 0x20000;
@@ -98,7 +98,7 @@ impl<'a> Bundle<'a> {
     }
 
     /// Make sure the decompressed stream covers [0, end).
-    pub fn ensure(&mut self, end: usize) -> Result<()> {
+    fn ensure(&mut self, end: usize) -> Result<()> {
         while self.data.len() < end && self.next_block < self.blocks.len() {
             let blk = &self.blocks[self.next_block];
             let src = &self.raw[blk.src..blk.src + blk.csize as usize];
@@ -178,7 +178,7 @@ fn write_raw(version: u32, player_ver: &str, engine_ver: &str, nodes: &[(u32, &s
     out.extend_from_slice(&(info.len() as u32).to_be_bytes());
     out.extend_from_slice(&(2 | F_COMBINED | F_INFO_AT_END).to_be_bytes());
     if version >= 7 {
-        out.resize(align_up(out.len(), 16), 0);
+        out.resize(out.len().next_multiple_of(16), 0);
     }
     out.extend_from_slice(&packed);
     out.extend_from_slice(&info_c);
