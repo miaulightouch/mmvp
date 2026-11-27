@@ -1,18 +1,18 @@
 //! A TW install: status, apply, restore.
 //!
 //! Apply = scan the referenced audio bundles, download the JP clips that differ, rebuild those bundles
-//! into `<pkg>/9876.blob` (or 9877, whichever the live index does not use) and redirect every index
-//! location of a rebuilt bundle to its new slot. Original blobs are never touched.
+//! into `<pkg>/9876.blob` and redirect every index location of a rebuilt bundle to its new slot.
+//! Original blobs are never touched.
 //!
 //! State lives in the install itself:
-//!  * an index is patched if a location points at a blob >= 5000; its original is `<pkg>/index.bak`
+//!  * an index is patched if a location points at 9876.blob; its original is `<pkg>/index.bak`
 //!    (only ever written from an unpatched index);
-//!  * every `NNNN.blob` >= 5000 in a package directory is ours;
+//!  * `<pkg>/9876.blob` is the only file mmvp adds besides the backup and the marker;
 //!  * `<pkg>/index.mmvp.json` records the voice version and the original blobs used, to tell when
 //!    a re-apply is needed.
 use super::voices::Voices;
-use mmvp_shared::index::{self, Key, REDIRECT_BASE};
-use mmvp_shared::{audio, blob, blob_no, sha1_hex};
+use mmvp_shared::index::{self, Key, BLOB};
+use mmvp_shared::{audio, blob, sha1_hex};
 use anyhow::{anyhow, bail, Context, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,6 @@ use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 pub const GAME_EXE: &str = "MabinogiMobile.exe";
-const BLOB_NO: u16 = 9876;
 const MARKER: &str = "index.mmvp.json";
 /// [base package, Starter sub-package]; bit 15 of an index location selects the member.
 const FAMILIES: [[&str; 2]; 2] = [["AssetPackages", "AssetPackages/Starter"], ["ResourcesPackage", "ResourcesPackage/Starter"]];
@@ -115,10 +114,9 @@ fn read_slot(path: &Path, slot: u16) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// Our blobs (>= 5000) in a package directory.
-fn our_blobs(dir: &Path) -> Vec<PathBuf> {
-    let entries = fs::read_dir(dir).into_iter().flatten().flatten();
-    entries.filter(|e| blob_no(&e.file_name().to_string_lossy()).is_some_and(|n| n >= REDIRECT_BASE)).map(|e| e.path()).collect()
+/// The blob mmvp writes in a package directory.
+fn our_blob(dir: &Path) -> PathBuf {
+    dir.join(format!("{BLOB:04}.blob"))
 }
 
 impl Install {
@@ -176,7 +174,7 @@ impl Install {
                     return Ok(st);
                 };
                 let marker: Option<Marker> = fs::read(dir.join(MARKER)).ok().and_then(|b| serde_json::from_slice(&b).ok());
-                ours |= marker.is_some() || !our_blobs(&dir).is_empty();
+                ours |= marker.is_some() || our_blob(&dir).exists();
                 if !index::is_patched(&live)? {
                     continue;
                 }
@@ -247,16 +245,6 @@ impl Install {
         let need: HashSet<String> = items.iter().flat_map(|i| i.jp.iter().map(|(_, h)| h.clone())).collect();
         voices.fetch(&need, &|d, t| progress(Step::Download, d, t))?;
 
-        // one blob number per family, not the one its live indexes use
-        let number: Vec<u16> = (0..FAMILIES.len())
-            .map(|f| -> Result<u16> {
-                let mut used = HashSet::new();
-                for p in pkgs.iter().filter(|p| p.family == f && p.patched) {
-                    used.extend(index::redirect_blobs(&p.live)?);
-                }
-                Ok(if used.contains(&BLOB_NO) { BLOB_NO + 1 } else { BLOB_NO })
-            })
-            .collect::<Result<_>>()?;
 
         // rebuild in parallel, appending each bundle to its package's new blob as it is done
         let mut counts = vec![0; pkgs.len()];
@@ -265,7 +253,7 @@ impl Install {
         for (pi, p) in pkgs.iter().enumerate() {
             out.push(match counts[pi] {
                 0 => None,
-                n => Some(Mutex::new((blob::Writer::create(p.dir.join(format!("{:04}.blob", number[p.family])), n)?, HashMap::new()))),
+                n => Some(Mutex::new((blob::Writer::create(our_blob(&p.dir), n)?, HashMap::new()))),
             });
         }
         let done = AtomicU64::new(0);
@@ -287,7 +275,7 @@ impl Install {
             }
             let mut w = out[it.pkg].as_ref().unwrap().lock().unwrap();
             let slot = w.0.append(&bundle)?;
-            w.1.insert((it.blob, it.slot), (number[p.family], slot));
+            w.1.insert((it.blob, it.slot), (BLOB, slot));
             progress(Step::Rebuild, done.fetch_add(1, Ordering::Relaxed) + 1, items.len() as u64);
             Ok(())
         })?;
@@ -296,8 +284,9 @@ impl Install {
             w.0.finish()?;
         }
 
-        // commit: index.bak -> new blobs -> indexes (a family's indexes point into each other's blobs)
-        // -> markers -> old blobs. An interruption leaves every index pointing at existing files.
+        // commit. A family's indexes point into each other's blobs, so: original indexes back first
+        // (nothing references 9876.blob any more), then the new blobs, then the new indexes.
+        // An interruption leaves every index pointing at existing files.
         progress(Step::Commit, 0, 1);
         let empty = HashMap::new();
         let red = |pi: usize| out[pi].as_ref().map_or(&empty, |w| &w.1);
@@ -309,38 +298,36 @@ impl Install {
             }
             new_index.push(index::patch(&p.orig, fam).with_context(|| format!("{}\\index", p.name))?.0);
         }
-        for p in pkgs.iter().filter(|p| !p.patched) {
-            write_atomic(&p.dir.join("index.bak"), &p.live)?;
-        }
-        let mut keep = HashSet::new();
-        for w in out.iter_mut().flatten() {
-            fs::rename(&w.0.tmp, &w.0.path).with_context(|| w.0.path.display().to_string())?;
-            keep.insert(w.0.path.clone());
+        for p in &pkgs {
+            if p.patched {
+                write_atomic(&p.dir.join("index"), &p.orig)?;
+            } else {
+                write_atomic(&p.dir.join("index.bak"), &p.live)?;
+            }
         }
         for (pi, p) in pkgs.iter().enumerate() {
-            if new_index[pi] != p.live {
-                write_atomic(&p.dir.join("index"), &new_index[pi])?;
+            match &out[pi] {
+                Some(w) => fs::rename(&w.0.tmp, &w.0.path).with_context(|| w.0.path.display().to_string())?,
+                None if our_blob(&p.dir).exists() => fs::remove_file(our_blob(&p.dir))?,
+                None => {}
             }
-            if index::is_patched(&new_index[pi])? {
-                let mut sources = BTreeMap::new();
-                for it in items.iter().filter(|i| i.pkg == pi) {
-                    let rel = format!("{}/{:04}.blob", p.name, it.blob);
-                    if !sources.contains_key(&rel) {
-                        sources.insert(rel, stat(&p.dir.join(format!("{:04}.blob", it.blob)))?);
-                    }
-                }
-                let m = Marker { voice_id: voices.id().into(), voice_date: voices.latest.date.clone(), index_sha1: sha1_hex(&new_index[pi]), sources };
-                write_atomic(&p.dir.join(MARKER), &serde_json::to_vec_pretty(&m)?)?;
-            } else {
+        }
+        for (pi, p) in pkgs.iter().enumerate() {
+            if new_index[pi] == p.orig {
                 let _ = fs::remove_file(p.dir.join(MARKER));
+                continue;
             }
-        }
-        for p in &pkgs {
-            for b in our_blobs(&p.dir).into_iter().filter(|b| !keep.contains(b)) {
-                fs::remove_file(&b).with_context(|| b.display().to_string())?;
+            write_atomic(&p.dir.join("index"), &new_index[pi])?;
+            let mut sources = BTreeMap::new();
+            for it in items.iter().filter(|i| i.pkg == pi) {
+                let rel = format!("{}/{:04}.blob", p.name, it.blob);
+                if !sources.contains_key(&rel) {
+                    sources.insert(rel, stat(&p.dir.join(format!("{:04}.blob", it.blob)))?);
+                }
             }
-        }
-        voices.prune_cache();
+            let m = Marker { voice_id: voices.id().into(), voice_date: voices.latest.date.clone(), index_sha1: sha1_hex(&new_index[pi]), sources };
+            write_atomic(&p.dir.join(MARKER), &serde_json::to_vec_pretty(&m)?)?;
+        }        voices.prune_cache();
         Ok((items.len(), need.len()))
     }
 
@@ -352,8 +339,8 @@ impl Install {
             if p.patched {
                 write_atomic(&p.dir.join("index"), &p.orig)?;
             }
-            for b in our_blobs(&p.dir) {
-                fs::remove_file(&b).with_context(|| b.display().to_string())?;
+            if our_blob(&p.dir).exists() {
+                fs::remove_file(our_blob(&p.dir))?;
             }
             let _ = fs::remove_file(p.dir.join(MARKER));
         }
