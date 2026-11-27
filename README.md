@@ -49,7 +49,7 @@ docs/                 technical notes
 npm ci
 npm run dev                  # start the GUI in development mode
 npm test                     # cargo test; set MMVP_TEST_ROOT / MMVP_TEST_SOURCE to run the end-to-end test
-npm run dump -- <jp_root>    # only dump the voice site into work/pages/<date>
+npm run dump -- <jp_root> --date YYYY-MM-DD   # only dump the voice site into work/pages/<date>
 npm run publish:voices       # dump -> compare with the live site -> deploy if changed (reads deploy.local.json; -- --dry-run / --force)
 git tag v0.2.0 && git push origin v0.2.0   # release: the version is in src-tauri/Cargo.toml, GitHub Actions builds it
 ```

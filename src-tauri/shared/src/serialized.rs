@@ -1,8 +1,10 @@
-//! SerializedFile (format 17..22, as used by Unity 2021.3): header, types with embedded type trees,
+//! SerializedFile (format 22, the one Unity 2021.3 writes): header, types with embedded type trees,
 //! object table. Only what is needed to read AssetBundle / AudioClip objects.
 use crate::common_strings::COMMON_STRINGS;
 use crate::rd::Rd;
 use anyhow::{bail, Result};
+
+const VERSION: u32 = 22;
 
 #[derive(Clone, Debug)]
 pub struct TNode {
@@ -48,14 +50,14 @@ fn str_at(buf: &[u8], v: u32) -> String {
     String::from_utf8_lossy(&s[..e]).into_owned()
 }
 
-fn read_tree(r: &mut Rd, version: u32) -> Result<Vec<TNode>> {
+fn read_tree(r: &mut Rd) -> Result<Vec<TNode>> {
+    const NODE: usize = 32;
     let n = r.i32()? as usize;
     let sbuf_len = r.i32()? as usize;
-    let node_sz = if version >= 19 { 32 } else { 24 };
-    let raw = r.take(n * node_sz)?;
+    let raw = r.take(n * NODE)?;
     let sbuf = r.take(sbuf_len)?;
     let mut out = Vec::with_capacity(n);
-    for c in raw.chunks_exact(node_sz) {
+    for c in raw.chunks_exact(NODE) {
         let mut q = Rd::new(c, r.be);
         let _ver = q.u16()?;
         let level = q.u8()?;
@@ -72,27 +74,22 @@ fn read_tree(r: &mut Rd, version: u32) -> Result<Vec<TNode>> {
 
 impl SerializedFile {
     pub fn parse(buf: &[u8]) -> Result<Self> {
-        let mut h = Rd::new(buf, true);
-        let _meta_size = h.u32()?;
-        let _file_size = h.u32()?;
-        let version = h.u32()?;
-        let mut data_offset = h.u32()? as usize;
-        if !(17..=22).contains(&version) {
+        let mut r = Rd::new(buf, true);
+        r.take(8)?; // metadata size, file size: unused since format 22
+        let version = r.u32()?;
+        if version != VERSION {
             bail!("unsupported SerializedFile version {version}");
         }
-        if h.u8()? != 0 {
+        r.take(4)?; // data offset: unused since format 22
+        if r.u8()? != 0 {
             bail!("big-endian SerializedFile not supported");
         }
-        h.take(3)?;
-        if version >= 22 {
-            let _ms = h.u32()?;
-            let _fs = h.i64()?;
-            data_offset = h.i64()? as usize;
-            let _unk = h.i64()?;
-        }
-        // the header is big-endian, everything after it little-endian
-        let mut r = h;
-        r.be = false;
+        r.take(3)?;
+        let _meta_size = r.u32()?;
+        let _file_size = r.i64()?;
+        let data_offset = r.i64()? as usize;
+        let _unknown = r.i64()?;
+        r.be = false; // the header is big-endian, everything after it little-endian
         let _unity = r.cstr()?;
         let _platform = r.i32()?;
         let type_tree = r.u8()? != 0;
@@ -109,11 +106,9 @@ impl SerializedFile {
                 r.take(16)?; // script id
             }
             r.take(16)?; // old type hash
-            let tree = read_tree(&mut r, version)?;
-            if version >= 21 {
-                let deps = r.i32()? as usize;
-                r.take(4 * deps)?;
-            }
+            let tree = read_tree(&mut r)?;
+            let deps = r.i32()? as usize;
+            r.take(4 * deps)?;
             types.push(SType { class_id, tree });
         }
         let oc = r.i32()? as usize;
@@ -121,7 +116,7 @@ impl SerializedFile {
         for _ in 0..oc {
             r.align(4);
             let path_id = r.i64()?;
-            let start = if version >= 22 { r.i64()? as usize } else { r.u32()? as usize };
+            let start = r.i64()? as usize;
             let size = r.u32()? as usize;
             let type_idx = r.i32()? as usize;
             if type_idx >= types.len() {

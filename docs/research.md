@@ -63,11 +63,11 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 
 ### 語音站台
 
-`mmvp-dumper` 從 JP 用戶端產生一個靜態站台並部署。格式定義在 `src-tauri/shared/src/site.rs`。
+`mmvp-dumper` 從 JP 用戶端產生一個靜態站台並部署（日期由 `--date` 指定，`npm run publish:voices` 會傳入當天的本地日期）。格式定義在 `src-tauri/shared/src/site.rs`。
 
 | 檔案 | 內容 |
 |---|---|
-| `latest.json` | 日期、manifest 的 SHA1、語音數量與大小 |
+| `latest.json` | 格式版本、日期、manifest 的 SHA1、語音數量與大小 |
 | `manifest.json` | 每段語音的大小與 AudioClip 欄位；bundle 名稱＋路徑 → 語音；路徑 → 最常見的語音 |
 | `clips/<sha1>` | JP 原始音訊，以內容 SHA1 命名 |
 
@@ -89,7 +89,7 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 
 - index 裡有指向 `9876.blob` 或 `9877.blob` 的位置：已套用。
 - `9876.blob`、`9877.blob`：mmvp 產生的檔案；其他編號的 blob 一律視為遊戲原檔。
-- `index.mmvp.json`：記錄套用的語音版本，以及當時原始 blob 的大小與修改時間。用來判斷遊戲更新後要不要重新套用。
+- `index.mmvp.json`：記錄套用的語音版本，用來判斷語音更新後要不要重新套用。遊戲更新會重寫 index，那時 index 不再指向 mmvp 的 blob，就會提示重新套用。
 
 ### 自我更新
 

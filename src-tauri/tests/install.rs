@@ -25,7 +25,6 @@ fn apply_reapply_restore() {
     let st = install.status().unwrap();
     assert!(matches!(st.state, State::Patched));
     assert_eq!(st.voice.map(|v| v.id), Some(voices.latest.manifest_sha1.clone()));
-    assert!(!st.stale);
     assert!(root.join("AssetPackages\\9876.blob").exists());
 
     install.apply(&voices, &|_, _, _| {}).unwrap(); // re-apply alternates the blob number

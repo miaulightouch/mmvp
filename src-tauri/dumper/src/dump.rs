@@ -1,14 +1,14 @@
 //! JP client -> voice site directory (see mmvp_shared::site).
 use anyhow::{Context, Result};
 use mmvp_shared::audio::Audio;
-use mmvp_shared::site::{Clip, Latest, Manifest, VERSION, VOICE_FILTER};
+use mmvp_shared::site::{Clip, Latest, Manifest, LATEST, MANIFEST, VERSION};
 use mmvp_shared::{blob, blob_no, sha1_hex, FAMILIES};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 const HEADERS: &str = include_str!("../site/_headers");
 const LANDING: &str = include_str!("../site/index.html");
@@ -35,21 +35,9 @@ fn dump_blob(path: &Path) -> Result<BlobVoices> {
     Ok((refs, clips))
 }
 
-/// Today's date (UTC) as YYYY-MM-DD.
-fn today() -> String {
-    let days = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64 / 86_400;
-    // civil-from-days (Howard Hinnant)
-    let z = days + 719_468;
-    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
-    format!("{:04}-{m:02}-{d:02}", era * 400 + yoe + i64::from(m <= 2))
-}
-
-/// Dump `jp_root` into `out/<date>`; -> that directory.
-pub fn dump(jp_root: &Path, out: &Path, repo: Option<&str>) -> Result<PathBuf> {
+/// Dump `jp_root` into `out/<date>` (`date` = YYYY-MM-DD, shown to users as the voice version);
+/// -> that directory.
+pub fn dump(jp_root: &Path, out: &Path, date: &str, repo: Option<&str>) -> Result<PathBuf> {
     // the JP launcher deletes index files while it updates: never dump a half-written install
     if !jp_root.join("AssetPackages").join("index").exists() {
         anyhow::bail!("{}\\AssetPackages\\index missing: is the JP launcher updating?", jp_root.display());
@@ -66,7 +54,7 @@ pub fn dump(jp_root: &Path, out: &Path, repo: Option<&str>) -> Result<PathBuf> {
     // parallel, then merged in blob order: the output only depends on the input
     let per_blob: Vec<BlobVoices> = blobs.par_iter().map(|p| dump_blob(p)).collect::<Result<_>>()?;
 
-    let mut m = Manifest { version: VERSION, filter: VOICE_FILTER.into(), clips: BTreeMap::new(), default: BTreeMap::new(), bundles: BTreeMap::new() };
+    let mut m = Manifest { version: VERSION, clips: BTreeMap::new(), default: BTreeMap::new(), bundles: BTreeMap::new() };
     let mut votes: HashMap<String, Vec<(String, usize)>> = HashMap::new(); // path -> (sha1, count) in first-seen order
     let mut payloads: Vec<(String, Vec<u8>)> = Vec::new();
     for (refs, clips) in per_blob {
@@ -94,8 +82,7 @@ pub fn dump(jp_root: &Path, out: &Path, repo: Option<&str>) -> Result<PathBuf> {
         anyhow::bail!("{} clips: Cloudflare Pages allows at most {MAX_FILES} files per deployment", m.clips.len());
     }
 
-    let date = today();
-    let site = out.join(&date);
+    let site = out.join(date);
     let _ = fs::remove_dir_all(&site);
     fs::create_dir_all(site.join("clips"))?;
     let bytes: u64 = payloads.iter().map(|p| p.1.len() as u64).sum();
@@ -103,9 +90,9 @@ pub fn dump(jp_root: &Path, out: &Path, repo: Option<&str>) -> Result<PathBuf> {
         fs::write(site.join("clips").join(h), data)?;
     }
     let raw = serde_json::to_vec(&m)?;
-    fs::write(site.join("manifest.json"), &raw)?;
-    let latest = Latest { version: VERSION, date, manifest: "manifest.json".into(), manifest_sha1: sha1_hex(&raw), clips: m.clips.len(), bytes };
-    fs::write(site.join("latest.json"), serde_json::to_vec_pretty(&latest)?)?;
+    fs::write(site.join(MANIFEST), &raw)?;
+    let latest = Latest { version: VERSION, date: date.into(), manifest_sha1: sha1_hex(&raw), clips: m.clips.len(), bytes };
+    fs::write(site.join(LATEST), serde_json::to_vec_pretty(&latest)?)?;
     fs::write(site.join("_headers"), HEADERS)?;
     if let Some(repo) = repo {
         let html = LANDING

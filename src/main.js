@@ -49,7 +49,7 @@ function render() {
     : "";
 
   const outdated = s && s.state === "patched" && voices && s.voice?.id !== voices.manifest_sha1;
-  const reapply = s && (s.state === "reverted" || s.stale || outdated);
+  const reapply = s && (s.state === "reverted" || outdated);
   $("apply").textContent = reapply ? "重新套用日文語音" : "套用日文語音";
   $("apply").disabled = busy || !s || !voices || view.game_running || s.state === "missing";
   $("restore").disabled = busy || !s || view.game_running || s.state === "original";
@@ -59,7 +59,6 @@ function render() {
   if (view.error) banner(view.error, null, null, "err");
   else if (view.game_running) banner("遊戲正在執行，請先關閉遊戲。", refresh, "重新檢查");
   else if (s.state === "reverted") banner("遊戲更新後語音回到原版。", run, "重新套用");
-  else if (s.stale) banner("遊戲檔案在套用後有更新，需要重新套用。", run, "重新套用");
   else if (outdated) banner(s.voice ? `有新的日文語音（${date(voices.date)} 版）。` : "無法確認已套用的語音版本。", run, s.voice ? "更新" : "重新套用");
   else if (update) banner(`有新版程式 v${update}。`, installUpdate, "更新並重新啟動");
   else banner(null);

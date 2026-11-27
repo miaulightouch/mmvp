@@ -47,7 +47,7 @@ docs/                 技術筆記
 npm ci
 npm run dev                  # 開發模式啟動 GUI
 npm test                     # cargo test；設 MMVP_TEST_ROOT / MMVP_TEST_SOURCE 可跑端到端測試
-npm run dump -- <jp_root>    # 只 dump 語音站台到 work/pages/<日期>
+npm run dump -- <jp_root> --date YYYY-MM-DD   # 只 dump 語音站台到 work/pages/<日期>
 npm run publish:voices       # dump → 和線上比對 → 有變動才部署（讀 deploy.local.json，可加 -- --dry-run／--force）
 git tag v0.2.0 && git push origin v0.2.0   # 發佈程式：版本寫在 src-tauri/Cargo.toml，由 GitHub Actions 建置
 ```

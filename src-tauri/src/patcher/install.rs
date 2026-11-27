@@ -9,8 +9,7 @@
 //!  * an index is patched if a location points at 9876 or 9877; its original is `<pkg>/index.bak`
 //!    (only ever written from an unpatched index);
 //!  * `9876.blob` / `9877.blob` in a package directory are ours, any other blob is a game file;
-//!  * `<pkg>/index.mmvp.json` records the voice version and the original blobs used, to tell when
-//!    a re-apply is needed.
+//!  * `<pkg>/index.mmvp.json` records the voice version the index was patched with.
 use super::voices::Voices;
 use anyhow::{anyhow, bail, Context, Result};
 use mmvp_shared::index::{self, Key, BLOBS};
@@ -23,7 +22,6 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::UNIX_EPOCH;
 
 pub const GAME_EXE: &str = "MabinogiMobile.exe";
 const MARKER: &str = "index.mmvp.json";
@@ -64,8 +62,6 @@ pub struct Status {
     pub redirected: usize,
     /// voice version the install was patched with, if known
     pub voice: Option<Voice>,
-    /// original blobs changed since apply (game update that kept the index): re-apply needed
-    pub stale: bool,
 }
 
 /// What an apply did.
@@ -79,9 +75,8 @@ pub struct Applied {
 struct Marker {
     voice_id: String,
     voice_date: String,
+    /// the patched index the marker belongs to
     index_sha1: String,
-    /// "pkg/NNNN.blob" -> (size, mtime)
-    sources: BTreeMap<String, (u64, u64)>,
 }
 
 struct Pkg {
@@ -106,11 +101,6 @@ type Redirects = [[HashMap<Key, Key>; 2]; 2];
 
 pub struct Install {
     pub root: PathBuf,
-}
-
-fn stat(p: &Path) -> Result<(u64, u64)> {
-    let m = fs::metadata(p).with_context(|| p.display().to_string())?;
-    Ok((m.len(), m.modified()?.duration_since(UNIX_EPOCH)?.as_nanos() as u64))
 }
 
 fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
@@ -213,7 +203,7 @@ impl Install {
     }
 
     pub fn status(&self) -> Result<Status> {
-        let mut st = Status { state: State::Original, redirected: 0, voice: None, stale: false };
+        let mut st = Status { state: State::Original, redirected: 0, voice: None };
         let mut ours = false;
         let mut voices = Vec::new(); // the voice version of each patched package, None if unknown
         for (_, _, _, dir) in self.dirs() {
@@ -228,9 +218,6 @@ impl Install {
             }
             st.redirected += index::redirected_entries(&live)?;
             let marker = marker.filter(|m| m.index_sha1 == sha1_hex(&live));
-            if let Some(m) = &marker {
-                st.stale |= m.sources.iter().any(|(rel, s)| stat(&self.root.join(rel)).ok().as_ref() != Some(s));
-            }
             voices.push(marker.map(|m| Voice { id: m.voice_id, date: m.voice_date }));
         }
         st.state = if !voices.is_empty() { State::Patched } else if ours { State::Reverted } else { State::Original };
@@ -308,7 +295,7 @@ impl Install {
         for p in pkgs.iter().filter(|p| !p.patched) {
             write_atomic(&p.dir.join("index.bak"), &p.live)?;
         }
-        for ((p, (new, changed)), items) in pkgs.iter().zip(&new_index).zip(items) {
+        for (p, (new, changed)) in pkgs.iter().zip(&new_index) {
             if *new != p.live {
                 write_atomic(&p.dir.join("index"), new)?;
             }
@@ -316,12 +303,8 @@ impl Install {
                 let _ = fs::remove_file(p.dir.join(MARKER));
                 continue;
             }
-            let mut sources = BTreeMap::new();
-            for it in items {
-                sources.insert(format!("{}/{:04}.blob", p.name, it.blob), stat(&blob_path(&p.dir, it.blob))?);
-            }
             let latest = &voices.latest;
-            let m = Marker { voice_id: latest.manifest_sha1.clone(), voice_date: latest.date.clone(), index_sha1: sha1_hex(new), sources };
+            let m = Marker { voice_id: latest.manifest_sha1.clone(), voice_date: latest.date.clone(), index_sha1: sha1_hex(new) };
             write_atomic(&p.dir.join(MARKER), &serde_json::to_vec_pretty(&m)?)?;
         }
         for (p, items) in pkgs.iter().zip(items) {

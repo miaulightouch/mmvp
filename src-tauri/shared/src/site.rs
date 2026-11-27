@@ -6,19 +6,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
+pub const LATEST: &str = "latest.json";
+pub const MANIFEST: &str = "manifest.json";
+
 /// Container paths that are voices.
 pub fn is_voice(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
     p.contains("/voice/") || p.contains("_vo_")
 }
-pub const VOICE_FILTER: &str = "(/voice/|_vo_)";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Latest {
     pub version: u32,
     pub date: String,
-    pub manifest: String,
     pub manifest_sha1: String,
     pub clips: usize,
     pub bytes: u64,
@@ -35,7 +36,6 @@ pub struct Clip {
 #[derive(Serialize, Deserialize)]
 pub struct Manifest {
     pub version: u32,
-    pub filter: String,
     /// sha1 -> clip
     pub clips: BTreeMap<String, Clip>,
     /// container path -> most common sha1 (fallback when JP has no bundle of that name)

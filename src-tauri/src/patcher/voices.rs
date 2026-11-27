@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use crate::net;
 use mmvp_shared::sha1_hex;
-use mmvp_shared::site::{Latest, Manifest, VERSION};
+use mmvp_shared::site::{Latest, Manifest, LATEST, MANIFEST, VERSION};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -27,11 +27,12 @@ impl Source {
         }
     }
     pub fn latest(&self) -> Result<Latest> {
-        let l: Latest = serde_json::from_slice(&self.get("latest.json")?).context("latest.json")?;
-        if l.version != VERSION {
-            bail!("語音來源格式 {} 不支援，請更新程式", l.version);
+        // the version first: other fields may differ between formats
+        let raw: serde_json::Value = serde_json::from_slice(&self.get(LATEST)?).context(LATEST)?;
+        if raw.get("version").and_then(|v| v.as_u64()) != Some(VERSION.into()) {
+            bail!("語音來源格式不符（{}），請更新程式", raw.get("version").unwrap_or(&serde_json::Value::Null));
         }
-        Ok(l)
+        serde_json::from_value(raw).context(LATEST)
     }
 }
 
@@ -46,11 +47,11 @@ pub struct Voices {
 impl Voices {
     pub fn open(source: Source, cache: &Path) -> Result<Voices> {
         let latest = source.latest()?;
-        let raw = source.get(&latest.manifest)?;
+        let raw = source.get(MANIFEST)?;
         if sha1_hex(&raw) != latest.manifest_sha1 {
             bail!("manifest.json 與 latest.json 不符（語音正在更新？請稍後再試）");
         }
-        let manifest: Manifest = serde_json::from_slice(&raw).context("manifest.json")?;
+        let manifest: Manifest = serde_json::from_slice(&raw).context(MANIFEST)?;
         Ok(Voices { source, latest, manifest, cache: cache.join("clips") })
     }
 

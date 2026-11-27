@@ -14,9 +14,11 @@ for (const key of ["project", "url", "jp_root"]) {
 }
 const repo = JSON.parse(readFileSync("package.json", "utf8")).repository.replace(/^github:/, "");
 
+const today = new Date().toLocaleDateString("sv"); // YYYY-MM-DD, local time
+
 const site = execFileSync(
   "cargo",
-  ["run", "--release", "-q", "--manifest-path", "src-tauri/Cargo.toml", "-p", "mmvp-dumper", "--", cfg.jp_root, "--out", "work/pages", "--repo", repo],
+  ["run", "--release", "-q", "--manifest-path", "src-tauri/Cargo.toml", "-p", "mmvp-dumper", "--", cfg.jp_root, "--date", today, "--out", "work/pages", "--repo", repo],
   { stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" },
 ).trim();
 const next = JSON.parse(readFileSync(join(site, "latest.json"), "utf8"));
