@@ -1,5 +1,5 @@
 // GUI texts in English and Traditional Chinese. The language follows the system (any Chinese locale
-// gets Traditional Chinese, everything else English) until the A/文 button picks one; the backend is
+// gets Traditional Chinese, everything else English) until the language button picks one; the backend is
 // told through `set_lang`.
 // Functions take the values to fill in. `mb` is megabytes, already formatted.
 const TEXTS = {
@@ -67,7 +67,7 @@ const TEXTS = {
   },
 };
 
-// the A/文 button's choice if there is one, else the system language
+// the language button's choice if there is one, else the system language
 const LANG = localStorage.getItem("lang") ?? (navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en");
 const T = TEXTS[LANG];
 const OTHER = LANG === "zh" ? "en" : "zh";
@@ -78,8 +78,9 @@ document.title = T.title;
 for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = T[el.dataset.i18n];
 for (const el of document.querySelectorAll("[data-i18n-title]")) el.title = T[el.dataset.i18nTitle];
 
-// A/文: switch to the other language. Texts are applied at load, so the page reloads.
+// language button: switch to the other language. Texts are applied at load, so the page reloads.
 document.getElementById("lang").title = TEXTS[OTHER].language;
+document.getElementById("lang").ariaLabel = TEXTS[OTHER].language;
 document.getElementById("lang").onclick = () => {
   localStorage.setItem("lang", OTHER);
   location.reload();

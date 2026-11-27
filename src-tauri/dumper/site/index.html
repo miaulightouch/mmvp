@@ -45,19 +45,23 @@
   li + li { margin-top: 6px; }
   .note { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); margin-top: 40px; padding-top: 16px; }
   a { color: var(--accent); }
-  #lang { position: absolute; top: 16px; right: 16px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  #lang { position: absolute; top: 16px; right: 16px; display: flex; padding: 8px; cursor: pointer; color: var(--muted); }
+  #lang:hover { color: var(--fg); }
+  #lang svg { width: 20px; height: 20px; fill: currentColor; }
   /* both languages are in the page; the script below shows one */
   html[lang="en"] [lang="zh-Hant"], html[lang="zh-Hant"] [lang="en"] { display: none; }
 </style>
 </head>
 <body>
-<button id="lang" class="btn">A/文</button>
+<button id="lang" class="btn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg></button>
 <script>
-  // the A/文 button's choice if there is one, else the browser language
+  // the language button's choice if there is one, else the browser language
   const TITLES = { "en": "MMVP - Mabinogi Mobile JP Voice Pack", "zh-Hant": "MMVP - 瑪奇 Mobile 日文語音包" };
+  const SWITCH = { "en": "中文", "zh-Hant": "English" }; // the button's tooltip names the other language
   function setLang(lang) {
     document.documentElement.lang = lang;
     document.title = TITLES[lang];
+    document.getElementById("lang").title = document.getElementById("lang").ariaLabel = SWITCH[lang];
   }
   setLang(localStorage.getItem("lang") ?? (navigator.language.toLowerCase().startsWith("zh") ? "zh-Hant" : "en"));
   document.getElementById("lang").onclick = () => {
