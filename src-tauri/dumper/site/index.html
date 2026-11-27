@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>瑪奇 Mobile 日文語音</title>
+<title>Mabinogi Mobile JP Voice</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -34,32 +34,46 @@
   li + li { margin-top: 6px; }
   .note { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); margin-top: 40px; padding-top: 16px; }
   a { color: var(--accent); }
+  /* both languages are in the page; the script below picks one by the browser language */
+  html[lang="en"] [lang="zh-Hant"], html[lang="zh-Hant"] [lang="en"] { display: none; }
 </style>
 </head>
 <body>
+<script>
+  if (navigator.language.toLowerCase().startsWith("zh")) {
+    document.documentElement.lang = "zh-Hant";
+    document.title = "瑪奇 Mobile 日文語音";
+  }
+</script>
 <main>
-  <h1>瑪奇 Mobile 日文語音</h1>
-  <p class="lead">把台版用戶端的 NPC 與劇情語音換成日版配音。只替換語音，原始遊戲檔案不會被修改，隨時可以還原。</p>
+  <h1><span lang="en">Mabinogi Mobile JP Voice</span><span lang="zh-Hant">瑪奇 Mobile 日文語音</span></h1>
+  <p class="lead" lang="en">Replaces the NPC and story voices of the Taiwanese client with the Japanese ones. Only voices are replaced, no original game file is modified, and you can restore at any time.</p>
+  <p class="lead" lang="zh-Hant">把台版用戶端的 NPC 與劇情語音換成日版配音。只替換語音，原始遊戲檔案不會被修改，隨時可以還原。</p>
 
   <div class="cta">
-    <a class="btn primary" href="{{REPO_URL}}/releases/latest">下載 mmvp.exe</a>
-    <a class="btn" href="{{REPO_URL}}">GitHub 專案</a>
+    <a class="btn primary" href="{{REPO_URL}}/releases/latest"><span lang="en">Download mmvp.exe</span><span lang="zh-Hant">下載 mmvp.exe</span></a>
+    <a class="btn" href="{{REPO_URL}}"><span lang="en">GitHub project</span><span lang="zh-Hant">GitHub 專案</span></a>
   </div>
 
   <div class="card">
-    <div class="row"><div class="k">語音版本</div><div>{{DATE}}</div></div>
-    <div class="row"><div class="k">內容</div><div>{{CLIPS}} 段語音，{{MB}} MB</div></div>
-    <div class="row"><div class="k">版本 ID</div><div class="mono">{{ID}}</div></div>
+    <div class="row"><div class="k"><span lang="en">Voice version</span><span lang="zh-Hant">語音版本</span></div><div>{{DATE}}</div></div>
+    <div class="row"><div class="k"><span lang="en">Content</span><span lang="zh-Hant">內容</span></div><div><span lang="en">{{CLIPS}} clips, {{MB}} MB</span><span lang="zh-Hant">{{CLIPS}} 段語音，{{MB}} MB</span></div></div>
+    <div class="row"><div class="k"><span lang="en">Version ID</span><span lang="zh-Hant">版本 ID</span></div><div class="mono">{{ID}}</div></div>
   </div>
 
-  <h2>使用方式</h2>
-  <ol>
+  <h2><span lang="en">How to use</span><span lang="zh-Hant">使用方式</span></h2>
+  <ol lang="en">
+    <li>Download <span class="mono">mmvp.exe</span> from <a href="{{REPO_URL}}/releases/latest">GitHub Releases</a>, put it in a writable folder and run it (no installer).</li>
+    <li>Close the game, open mmvp, check the game folder and press “Apply JP voices”. The program downloads the voices it needs from here.</li>
+    <li>After a game update or when new JP voices are out, the program asks you to re-apply. It also offers its own updates.</li>
+  </ol>
+  <ol lang="zh-Hant">
     <li>從 <a href="{{REPO_URL}}/releases/latest">GitHub Releases</a> 下載 <span class="mono">mmvp.exe</span>，放在可寫入的資料夾直接執行（免安裝）。</li>
     <li>關閉遊戲，開啟 mmvp，確認遊戲目錄後按「套用日文語音」。程式會自動從這裡下載需要的語音。</li>
     <li>遊戲更新或有新的日文語音時，程式會提示重新套用；程式本身也會自動提示更新。</li>
   </ol>
 
-  <p class="note">非官方工具，與 NEXON、devCAT 無關。</p>
+  <p class="note"><span lang="en">Unofficial tool, not affiliated with NEXON or devCAT.</span><span lang="zh-Hant">非官方工具，與 NEXON、devCAT 無關。</span></p>
 </main>
 </body>
 </html>
