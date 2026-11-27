@@ -38,15 +38,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: crates/patcher/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
       - run: npm ci
-        working-directory: crates/patcher
-
-      - run: cargo test --release --workspace
+      - run: npm test
 
       - name: Build and publish the installer
         uses: tauri-apps/tauri-action@v0
@@ -57,7 +54,6 @@ jobs:
           MMVP_SOURCE: ${{ vars.MMVP_SOURCE }}
           MMVP_REPO: ${{ github.repository }}
         with:
-          projectPath: crates/patcher
           tauriScript: npx tauri
           args: --config ${{ runner.temp }}/updater.json
           tagName: ${{ github.ref_name }}
@@ -70,10 +66,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        working-directory: crates/patcher
         run: |
           p="$RUNNER_TEMP/mmvp-portable.exe"
-          cp ../../target/release/mmvp.exe "$p"
+          cp target/release/mmvp.exe "$p"
           npx tauri signer sign "$p"
           # v0.1.x portable copies update from the old asset name
           cp "$p" "$RUNNER_TEMP/mmvoice-portable.exe"; cp "$p.sig" "$RUNNER_TEMP/mmvoice-portable.exe.sig"

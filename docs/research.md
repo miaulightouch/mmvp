@@ -57,7 +57,7 @@ clips/<sha1>    JP 原始 FSB5
 _headers, index.html
 ```
 
-- manifest 只含內容，語音沒變時 SHA1 不變；它就是語音版本 id，`mmvp-dumper publish` 用它判斷要不要部署。[確認] Rust 版 dumper 產出的 manifest 與原本 Python 版 byte 相同（SHA1 `04d6034f…`），dump 26 秒（Python 129–191 秒）。
+- manifest 只含內容，語音沒變時 SHA1 不變；它就是語音版本 id，`npm run publish:voices`（`scripts/publish-voices.mjs`）用它判斷要不要部署。[確認] Rust 版 dumper 產出的 manifest 與原本 Python 版 byte 相同（SHA1 `04d6034f…`），dump 26 秒（Python 129–191 秒）。
 - Cloudflare Pages 單次部署上限 20000 個檔案；設定與 token 只在本機（`deploy.local.json`、`wrangler login`）。
 
 ## 套用（`crates/patcher/src/install.rs`）
@@ -80,5 +80,5 @@ _headers, index.html
 ## 建置
 
 - 本機：scoop 的 rustup（`stable-x86_64-pc-windows-gnu`）＋ `mingw`（dlltool）。GNU 版的 exe 需要旁邊有 `WebView2Loader.dll`；release 由 GitHub Actions 以 MSVC 建置，是單一 exe。
-- 部署語音需要 Node.js（`npx wrangler`）；Tauri CLI 也透過 npm（`crates/patcher/package.json`）。
+- Node.js：根目錄 `package.json` 提供 Tauri CLI、wrangler 與常用指令（`npm run dev / test / dump / publish:voices`）。
 - 發版設定（GitHub Actions）：secrets `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；variables `TAURI_UPDATER_PUBKEY`、`MMVP_SOURCE`。

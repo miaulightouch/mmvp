@@ -2112,7 +2112,6 @@ dependencies = [
  "anyhow",
  "mmvp-shared",
  "rayon",
- "serde",
  "serde_json",
 ]
 

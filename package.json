@@ -1,0 +1,16 @@
+{
+  "name": "mmvp",
+  "private": true,
+  "repository": "github:miaulightouch/mmvp",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "test": "cargo test --release --workspace",
+    "dump": "cargo run --release -p mmvp-dumper --",
+    "publish:voices": "node scripts/publish-voices.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "wrangler": "^4"
+  }
+}
