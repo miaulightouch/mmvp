@@ -55,9 +55,9 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 - 語音是 Unity 的 AudioClip（Vorbis，FSB5 格式），音訊存在 bundle 的 `.resource` 串流裡。
 - JP 和 TW 用相同的資產路徑（如 `…/sound/voice/npc/…`、`…/cutscene/…/voice/…_vo_NN.wav`），只是內容不同。
 - 兩版同名的 bundle（`AssetBundle.m_Name`，如 `dedicated_bundle_7dbd4a02`）內容對應，但所在的 blob／slot 不同。
-- 同一段語音常常嵌在多個 bundle 裡；少數路徑在 JP 的不同 bundle 裡有不同版本。
+- 只看 index 引用的 slot，每個語音路徑在 JP、TW 都只屬於一個 bundle。blob 裡沒被引用的舊 slot 常有同名 bundle 的舊版本（JP 有 75 個 slot、1472 段），不能拿來對應。
 - cutscene 的語音和整段 cutscene（Camera、Material 等）放在同一個 bundle，換語音就得換整個 bundle。
-- 規模（2026-11-27）：JP 有 7380 段不重複的語音（95.6 MB）；套到 TW 會動到 255 個 bundle、6745 段。
+- 規模：JP 有 7293 段不重複的語音（94.6 MB，2026-11-28）；套到 TW 會動到 255 個 bundle、6745 段（2026-11-27）。
 
 ## mmvp 的做法
 
@@ -72,6 +72,7 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 | `clips/<sha1>` | JP 原始音訊，以內容 SHA1 命名 |
 
 - manifest 只放內容，所以語音沒變時 SHA1 不變。這個 SHA1 就是「語音版本」，`npm run publish:voices` 靠它判斷要不要部署。
+- 只讀 JP index 引用的 slot，和套用時讀 TW 的方式相同。
 - 對應方式：先找 JP 同名 bundle 裡的同一路徑，找不到才用該路徑最常見的版本。
 
 ### 套用（`src-tauri/src/patcher/install.rs`）

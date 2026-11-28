@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use mmvp_shared::audio::Audio;
 use mmvp_shared::site::{Clip, Latest, Manifest, LATEST, MANIFEST, VERSION};
-use mmvp_shared::{blob, blob_no, sha1_hex, FAMILIES};
+use mmvp_shared::{blob, index, sha1_hex, FAMILIES};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -18,11 +18,14 @@ const MAX_FILES: usize = 20_000;
 /// Voices of one blob: references (bundle name, path, sha1) and the first payload per sha1.
 type BlobVoices = (Vec<(String, String, String)>, Vec<(String, Map<String, Value>, Vec<u8>)>);
 
-fn dump_blob(path: &Path) -> Result<BlobVoices> {
+/// `slots`: the slots the package index references, sorted; the others are leftovers of older
+/// versions of a bundle and must not be dumped.
+fn dump_blob(path: &Path, slots: &[u16]) -> Result<BlobVoices> {
     let data = fs::read(path).with_context(|| path.display().to_string())?;
     let (mut refs, mut clips): BlobVoices = Default::default();
     let table = blob::table(&mut &data[..]).with_context(|| path.display().to_string())?;
-    for (i, &(s, e)) in table.iter().enumerate() {
+    for &i in slots {
+        let Some(&(s, e)) = table.get(i as usize) else { anyhow::bail!("{}: index references missing slot {i}", path.display()) };
         let Some(mut audio) = Audio::parse(&data[s as usize..e as usize]).with_context(|| format!("{}#{i}", path.display()))? else { continue };
         for (p, fields, bytes) in audio.voices()? {
             let h = sha1_hex(&bytes);
@@ -43,16 +46,25 @@ pub fn dump(jp_root: &Path, out: &Path, date: &str, repo: Option<&str>) -> Resul
         anyhow::bail!("{}\\AssetPackages\\index missing: is the JP launcher updating?", jp_root.display());
     }
     let t0 = Instant::now();
-    let mut blobs = Vec::new();
+    // only the slots each package index references, like the patcher (blob -> sorted slots)
+    let mut blobs: Vec<(PathBuf, Vec<u16>)> = Vec::new();
     for pkg in FAMILIES.iter().flatten() {
         let dir = jp_root.join(pkg);
-        let mut names: Vec<String> = fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-        names.retain(|n| n.len() == 9 && blob_no(n).is_some());
-        names.sort();
-        blobs.extend(names.into_iter().map(|n| dir.join(n)));
+        if !dir.exists() {
+            continue;
+        }
+        let idx = fs::read(dir.join("index")).with_context(|| format!("{pkg}/index missing: is the JP launcher updating?"))?;
+        let mut by_blob: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
+        for (b, s) in index::slots(&idx).with_context(|| format!("{pkg}/index"))? {
+            by_blob.entry(b).or_default().push(s);
+        }
+        for (b, mut slots) in by_blob {
+            slots.sort();
+            blobs.push((dir.join(format!("{b:04}.blob")), slots));
+        }
     }
     // parallel, then merged in blob order: the output only depends on the input
-    let per_blob: Vec<BlobVoices> = blobs.par_iter().map(|p| dump_blob(p)).collect::<Result<_>>()?;
+    let per_blob: Vec<BlobVoices> = blobs.par_iter().map(|(p, slots)| dump_blob(p, slots)).collect::<Result<_>>()?;
 
     let mut m = Manifest { version: VERSION, clips: BTreeMap::new(), default: BTreeMap::new(), bundles: BTreeMap::new() };
     let mut votes: HashMap<String, Vec<(String, usize)>> = HashMap::new(); // path -> (sha1, count) in first-seen order
