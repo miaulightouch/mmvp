@@ -39,12 +39,12 @@ function render() {
   $("ver").textContent = "v" + view.version;
   $("root").textContent = view.root || "—";
   $("experimental").hidden = !view.experimental;
-  $("voices").textContent = voices ? T.voicesInfo(date(voices.date), voices.clips, mb(voices.bytes)) : T.checking;
+  // voice versions: date plus the start of the manifest SHA1 (one date can have several versions)
+  const version = (v) => `${date(v.date)} (${v.id.slice(0, 7)})`;
+  $("online").textContent = voices ? version({ date: voices.date, id: voices.manifest_sha1 }) : T.checking;
+  $("local").textContent = s?.state !== "patched" ? T.none : s.voice ? version(s.voice) : T.unknown;
   $("state").className = "pill " + (s ? s.state : "missing");
   $("state").textContent = s ? T.states[s.state] : "—";
-  $("detail").textContent = s && s.state === "patched"
-    ? T.detail(s.redirected) + (s.voice ? T.detailDate(date(s.voice.date)) : "")
-    : "";
 
   const outdated = s && s.state === "patched" && voices && s.voice?.id !== voices.manifest_sha1;
   const reapply = s && (s.state === "reverted" || outdated);
