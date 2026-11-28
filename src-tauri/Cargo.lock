@@ -1984,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "mmvp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "mmvp-dumper"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "mmvp-shared",
@@ -2011,7 +2011,7 @@ dependencies = [
 
 [[package]]
 name = "mmvp-shared"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "lz4_flex",
