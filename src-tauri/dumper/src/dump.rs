@@ -1,7 +1,7 @@
 //! JP client -> voice site directory (see mmvp_shared::site).
 use anyhow::{Context, Result};
 use mmvp_shared::audio::Audio;
-use mmvp_shared::site::{Clip, Latest, Manifest, LATEST, MANIFEST, VERSION};
+use mmvp_shared::site::{is_placeholder, Clip, Latest, Manifest, LATEST, MANIFEST, VERSION};
 use mmvp_shared::{blob, index, sha1_hex, FAMILIES};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
@@ -28,6 +28,10 @@ fn dump_blob(path: &Path, slots: &[u16]) -> Result<BlobVoices> {
         let Some(&(s, e)) = table.get(i as usize) else { anyhow::bail!("{}: index references missing slot {i}", path.display()) };
         let Some(mut audio) = Audio::parse(&data[s as usize..e as usize]).with_context(|| format!("{}#{i}", path.display()))? else { continue };
         for (p, fields, bytes) in audio.voices()? {
+            // no JP recording: leave the TW clip alone
+            if is_placeholder(bytes.len(), fields.get("m_Length").and_then(Value::as_f64).unwrap_or(0.0)) {
+                continue;
+            }
             let h = sha1_hex(&bytes);
             if !clips.iter().any(|c| c.0 == h) {
                 clips.push((h.clone(), fields, bytes));

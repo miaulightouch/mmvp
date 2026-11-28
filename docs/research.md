@@ -57,7 +57,9 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 - 兩版同名的 bundle（`AssetBundle.m_Name`，如 `dedicated_bundle_7dbd4a02`）內容對應，但所在的 blob／slot 不同。
 - 只看 index 引用的 slot，每個語音路徑在 JP、TW 都只屬於一個 bundle。blob 裡沒被引用的舊 slot 常有同名 bundle 的舊版本（JP 有 75 個 slot、1472 段），不能拿來對應。
 - cutscene 的語音和整段 cutscene（Camera、Material 等）放在同一個 bundle，換語音就得換整個 bundle。
-- 規模：JP 有 7293 段不重複的語音（94.6 MB，2026-11-28）；套到 TW 會動到 255 個 bundle、6745 段（2026-11-27）。
+- 語音的判斷（`site::is_voice`）：路徑含 `/voice/`、`_vo_NN`、`_voN`（如 `…/naozone/sfx/…_naozwhite_vo1.wav`），或 `_vox`（怪物、寵物的發聲）。
+- JP 沒有錄音的地方放的是佔位檔：288 bytes、1.25 秒（231 B/s），共 63 段。真的語音最低也有 1.8 kB/s，所以低於 1000 B/s（`site::MIN_BYTES_PER_SEC`）的 clip 不發布，TW 保留原音。
+- 規模（2026-11-28）：JP 有 7732 段不重複的語音（112.5 MB），7736 個路徑；套到 TW 會動到 261 個 bundle、6807 段。
 
 ## mmvp 的做法
 
