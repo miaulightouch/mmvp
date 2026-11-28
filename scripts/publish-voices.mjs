@@ -22,10 +22,12 @@ const site = execFileSync(
   { stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" },
 ).trim();
 const next = JSON.parse(readFileSync(join(site, "latest.json"), "utf8"));
-const live = await fetch(`${cfg.url.replace(/\/$/, "")}/latest.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-console.log(`live: ${live ? `${live.date} ${live.manifest_sha1}` : "-"}\nnew:  ${next.date} ${next.manifest_sha1}`);
+const nextPacks = readFileSync(join(site, "packs.json"), "utf8");
+const get = (f, as) => fetch(`${cfg.url.replace(/\/$/, "")}/${f}`).then((r) => (r.ok ? r[as]() : null)).catch(() => null);
+const [live, livePacks] = await Promise.all([get("latest.json", "json"), get("packs.json", "text")]);
+console.log(`live: ${live ? `${live.date} ${live.manifest_sha1}` : "-"}${livePacks === nextPacks ? "" : " (packs differ)"}\nnew:  ${next.date} ${next.manifest_sha1}`);
 
-if (live?.manifest_sha1 === next.manifest_sha1 && !force) {
+if (live?.manifest_sha1 === next.manifest_sha1 && livePacks === nextPacks && !force) {
   console.log("voices unchanged: nothing to deploy");
 } else if (dryRun) {
   console.log(`would deploy ${site} to Pages project ${cfg.project}`);

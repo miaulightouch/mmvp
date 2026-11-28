@@ -1,7 +1,9 @@
 //! The voice site the dumper writes and the patcher reads (Cloudflare Pages):
 //!   latest.json     Latest
 //!   manifest.json   Manifest; content only, so its SHA1 identifies the voice version
-//!   clips/<sha1>    raw FSB5 audio, content-addressed
+//!   packs.json      Packs: the clips concatenated per JP bundle, one download per bundle
+//!   packs/<sha1>    a pack, content-addressed
+//!   clips/<sha1>    raw FSB5 audio, content-addressed; only for clients up to v0.2 (they read no packs)
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -9,6 +11,9 @@ use std::collections::BTreeMap;
 pub const VERSION: u32 = 4;
 pub const LATEST: &str = "latest.json";
 pub const MANIFEST: &str = "manifest.json";
+pub const PACKS: &str = "packs.json";
+/// Cloudflare Pages: largest file of a deployment.
+pub const MAX_FILE_SIZE: u64 = 25 << 20;
 
 /// Container paths that are voices: `/voice/` folders, `_vo_NN` / `_voN` lines and `_vox` vocal effects.
 pub fn is_voice(path: &str) -> bool {
@@ -73,6 +78,23 @@ pub struct Manifest {
     pub default: BTreeMap<String, String>,
     /// bundle name -> container path -> sha1
     pub bundles: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+/// Every clip of one manifest in exactly one pack: the pack of the first bundle (by name) that uses it.
+#[derive(Serialize, Deserialize)]
+pub struct Packs {
+    /// the manifest these packs belong to; clients ignore packs of another version
+    pub manifest_sha1: String,
+    /// pack sha1 -> pack
+    pub packs: BTreeMap<String, Pack>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Pack {
+    pub bundle: String,
+    pub size: u64,
+    /// (clip sha1, offset) in file order; a clip's length is its manifest size
+    pub clips: Vec<(String, u64)>,
 }
 
 impl Manifest {

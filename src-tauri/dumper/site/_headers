@@ -1,6 +1,9 @@
 /clips/*
   Cache-Control: public, max-age=31536000, immutable
   Content-Type: application/octet-stream
+/packs/*
+  Cache-Control: public, max-age=31536000, immutable
+  Content-Type: application/octet-stream
 /*.json
   Cache-Control: no-cache
 /

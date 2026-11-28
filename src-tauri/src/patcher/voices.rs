@@ -1,9 +1,9 @@
 //! JP voices from the voice site (see mmvp_shared::site): the latest manifest, plus clips downloaded
-//! on demand into a local cache and verified by SHA1.
+//! on demand as per-bundle packs into a local per-clip cache, verified by SHA1.
 use anyhow::{bail, Context, Result};
 use crate::net;
 use mmvp_shared::sha1_hex;
-use mmvp_shared::site::{Latest, Manifest, LATEST, MANIFEST, VERSION};
+use mmvp_shared::site::{Latest, Manifest, Pack, Packs, LATEST, MANIFEST, PACKS, VERSION};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -41,6 +41,7 @@ pub struct Voices {
     /// `latest.manifest_sha1` is the voice version id
     pub latest: Latest,
     manifest: Manifest,
+    packs: Packs,
     cache: PathBuf,
 }
 
@@ -52,7 +53,11 @@ impl Voices {
             bail!(tr!("manifest.json does not match latest.json (voices being updated? try again later)", "manifest.json 與 latest.json 不符（語音正在更新？請稍後再試）"));
         }
         let manifest: Manifest = serde_json::from_slice(&raw).context(MANIFEST)?;
-        Ok(Voices { source, latest, manifest, cache: cache.join("clips") })
+        let packs: Packs = serde_json::from_slice(&source.get(PACKS)?).context(PACKS)?;
+        if packs.manifest_sha1 != latest.manifest_sha1 {
+            bail!(tr!("packs.json does not match latest.json (voices being updated? try again later)", "packs.json 與 latest.json 不符（語音正在更新？請稍後再試）"));
+        }
+        Ok(Voices { source, latest, manifest, packs, cache: cache.join("clips") })
     }
 
     pub fn lookup(&self, bundle: &str, path: &str) -> Option<&str> {
@@ -67,22 +72,36 @@ impl Voices {
         self.cache.join(sha1)
     }
 
-    /// Download the clips in `need` that are not cached yet (parallel, SHA1-verified).
+    /// Download the packs holding the clips in `need` that are not cached yet (parallel), verify each
+    /// pack and clip by SHA1 and cache the pack's clips.
     pub fn fetch(&self, need: &HashSet<String>, progress: &(dyn Fn(u64, u64) + Sync)) -> Result<()> {
         fs::create_dir_all(&self.cache)?;
-        let missing: Vec<&String> = need.iter().filter(|h| !self.path(h).exists()).collect();
-        let total: u64 = missing.iter().filter_map(|h| self.manifest.clips.get(*h)).map(|c| c.size).sum();
+        let missing: HashSet<&str> = need.iter().map(String::as_str).filter(|h| !self.path(h).exists()).collect();
+        let packs: Vec<(&String, &Pack)> =
+            self.packs.packs.iter().filter(|(_, p)| p.clips.iter().any(|(h, _)| missing.contains(h.as_str()))).collect();
+        let packed: HashSet<&str> = packs.iter().flat_map(|(_, p)| p.clips.iter().map(|(h, _)| h.as_str())).collect();
+        if let Some(h) = missing.iter().find(|h| !packed.contains(*h)) {
+            bail!(tr!("voice {h} is in no pack", "語音 {h} 不在任何語音包裡"));
+        }
+        let size = |h: &str| self.manifest.clips.get(h).map_or(0, |c| c.size as usize);
+        let total: u64 = packs.iter().map(|(_, p)| p.size).sum();
         let done = AtomicU64::new(0);
         let pool = rayon::ThreadPoolBuilder::new().num_threads(net::PARALLEL).build()?;
         pool.install(|| {
-            missing.par_iter().try_for_each(|h| -> Result<()> {
-                let data = self.source.get(&format!("clips/{h}"))?;
-                if sha1_hex(&data) != **h {
-                    bail!(tr!("voice {h}: incomplete download", "語音 {h} 下載不完整"));
+            packs.par_iter().try_for_each(|(ph, p)| -> Result<()> {
+                let data = self.source.get(&format!("packs/{ph}"))?;
+                if sha1_hex(&data) != **ph {
+                    bail!(tr!("voice pack {ph}: incomplete download", "語音包 {ph} 下載不完整"));
                 }
-                let tmp = self.path(h).with_extension("part");
-                fs::write(&tmp, &data)?;
-                fs::rename(&tmp, self.path(h))?;
+                for (h, off) in &p.clips {
+                    let clip = usize::try_from(*off).ok().and_then(|o| data.get(o..o + size(h)));
+                    let Some(clip) = clip.filter(|c| sha1_hex(c) == *h) else {
+                        bail!(tr!("voice pack {ph} does not match the manifest", "語音包 {ph} 與 manifest 不符"));
+                    };
+                    let tmp = self.path(h).with_extension("part");
+                    fs::write(&tmp, clip)?;
+                    fs::rename(&tmp, self.path(h))?;
+                }
                 progress(done.fetch_add(data.len() as u64, Ordering::Relaxed) + data.len() as u64, total);
                 Ok(())
             })

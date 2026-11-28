@@ -71,7 +71,13 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 |---|---|
 | `latest.json` | 格式版本、日期、manifest 的 SHA1、語音數量與大小 |
 | `manifest.json` | 每段語音的大小與 AudioClip 欄位；bundle 名稱＋路徑 → 語音；路徑 → 最常見的語音 |
-| `clips/<sha1>` | JP 原始音訊，以內容 SHA1 命名 |
+| `packs.json` | 所屬的 manifest SHA1；每個 pack 的 SHA1、bundle 名稱、大小，以及裡面每段語音的 SHA1 和 offset |
+| `packs/<sha1>` | 一個 JP bundle 的語音串接在一起，以內容 SHA1 命名 |
+| `clips/<sha1>` | JP 原始音訊，以內容 SHA1 命名；只給 v0.2 以前的程式用 |
+
+- 每段語音只放進一個 pack，也就是第一個（依名稱排序）用到它的 bundle 的 pack。2026-11-28 共有 442 個 pack，都在 Cloudflare Pages 單檔 25 MiB 的上限內，dumper 會檢查。
+- 為什麼要用 pack：每個請求的時間幾乎都是延遲。每個請求約 80–110 ms，資料本身只要 1–4 ms，所以 7732 個小檔就算 16 個平行下載也要約 40 秒。改成一個 bundle 一個檔之後，請求數少了 17 倍。HTTP/2、HTTP/3 在同樣並行數下沒有比較快（實測）。
+- v0.3 起的 patcher 只下載 pack，驗證 pack 和裡面每段語音的 SHA1，再拆成逐段的快取。packs.json 缺少或和 latest.json 對不上時直接報錯，不會改抓 `clips/`。
 
 - manifest 只放內容，所以語音沒變時 SHA1 不變。這個 SHA1 就是「語音版本」，`npm run publish:voices` 靠它判斷要不要部署。
 - 只讀 JP index 引用的 slot，和套用時讀 TW 的方式相同。
