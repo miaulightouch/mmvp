@@ -72,7 +72,7 @@ AssetPackages/   AssetPackages/Starter/   ResourcesPackage/   ResourcesPackage/S
 | `latest.json` | 格式版本、日期、manifest 的 SHA1、語音數量與大小 |
 | `manifest.json` | 每段語音的大小與 AudioClip 欄位；bundle 名稱＋路徑 → 語音；路徑 → 最常見的語音 |
 | `packs.json` | 所屬的 manifest SHA1；每個 pack 的 SHA1、bundle 名稱、大小，以及裡面每段語音的 SHA1 和 offset |
-| `packs/<sha1>` | 一個 JP bundle 的語音串接在一起，以內容 SHA1 命名 |
+| `packs/<sha1>` | pack：一個 JP bundle 的語音原始音訊串接在一起（不是跟 TW 的差分），以內容 SHA1 命名 |
 | `clips/<sha1>` | JP 原始音訊，以內容 SHA1 命名；只給 v0.2 以前的程式用 |
 
 - 每段語音只放進一個 pack，也就是第一個（依名稱排序）用到它的 bundle 的 pack。2026-11-28 共有 442 個 pack，都在 Cloudflare Pages 單檔 25 MiB 的上限內，dumper 會檢查。

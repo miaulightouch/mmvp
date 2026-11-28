@@ -81,7 +81,7 @@ impl Voices {
             self.packs.packs.iter().filter(|(_, p)| p.clips.iter().any(|(h, _)| missing.contains(h.as_str()))).collect();
         let packed: HashSet<&str> = packs.iter().flat_map(|(_, p)| p.clips.iter().map(|(h, _)| h.as_str())).collect();
         if let Some(h) = missing.iter().find(|h| !packed.contains(*h)) {
-            bail!(tr!("voice {h} is in no pack", "語音 {h} 不在任何語音包裡"));
+            bail!(tr!("voice {h} is in no pack", "語音 {h} 不在任何 pack 裡"));
         }
         let size = |h: &str| self.manifest.clips.get(h).map_or(0, |c| c.size as usize);
         let total: u64 = packs.iter().map(|(_, p)| p.size).sum();
@@ -91,12 +91,12 @@ impl Voices {
             packs.par_iter().try_for_each(|(ph, p)| -> Result<()> {
                 let data = self.source.get(&format!("packs/{ph}"))?;
                 if sha1_hex(&data) != **ph {
-                    bail!(tr!("voice pack {ph}: incomplete download", "語音包 {ph} 下載不完整"));
+                    bail!(tr!("pack {ph}: incomplete download", "pack {ph} 下載不完整"));
                 }
                 for (h, off) in &p.clips {
                     let clip = usize::try_from(*off).ok().and_then(|o| data.get(o..o + size(h)));
                     let Some(clip) = clip.filter(|c| sha1_hex(c) == *h) else {
-                        bail!(tr!("voice pack {ph} does not match the manifest", "語音包 {ph} 與 manifest 不符"));
+                        bail!(tr!("pack {ph} does not match the manifest", "pack {ph} 與 manifest 不符"));
                     };
                     let tmp = self.path(h).with_extension("part");
                     fs::write(&tmp, clip)?;

@@ -1,8 +1,9 @@
 //! The voice site the dumper writes and the patcher reads (Cloudflare Pages):
 //!   latest.json     Latest
 //!   manifest.json   Manifest; content only, so its SHA1 identifies the voice version
-//!   packs.json      Packs: the clips concatenated per JP bundle, one download per bundle
-//!   packs/<sha1>    a pack, content-addressed
+//!   packs.json      Packs: the index of the packs
+//!   packs/<sha1>    a pack: the JP voice clips of one bundle concatenated (not a diff against TW),
+//!                   content-addressed; one download per bundle
 //!   clips/<sha1>    raw FSB5 audio, content-addressed; only for clients up to v0.2 (they read no packs)
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
